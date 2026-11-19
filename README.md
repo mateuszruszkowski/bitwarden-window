@@ -21,6 +21,8 @@ cd bitwarden-window
 
 Run the installer from the same shell and profile where you use the official CLI. It installs under your home directory. The macOS menu and service start at graphical login. If `bw-window` is missing from your shell's PATH, use `~/.local/bin/bw-window` directly, or add `~/.local/bin` to PATH. The [Omarchy branch](https://github.com/mateuszruszkowski/bitwarden-window/tree/omarchy) and [macOS branch](https://github.com/mateuszruszkowski/bitwarden-window/tree/osx) include a platform-specific quick start. Use the root installer on all three branches so you get both the widget and its background service.
 
+Use real directories for `~/.local`, `~/.config` and the parent directories of the recovery identity. The broker rejects symbolic links along these paths.
+
 ## Account and server
 
 If `bw` is already signed in to the right account, the default settings are ready to use. You do not need an account ID. Run `bw config server` to see the CLI server. To set up a new CLI profile, choose the server **before** `bw login`. [Bitwarden CLI documentation](https://bitwarden.com/help/cli/#config)
@@ -65,7 +67,7 @@ Install `age-keygen` (from [age](https://github.com/FiloSottile/age)) before ins
 
 No account ID or server setting is required. The next window follows the account currently selected in `bw`. Within an open window, a change of account or server stops the recovery operation. To use a new account, start a new window.
 
-During an open window, explicitly run:
+Set up or edit the recovery configuration **before unlocking**. If you edited it during an open window, run `~/.local/bin/bw-window lock` and open a fresh window first. To create or verify the note, run
 
 ```sh
 ~/.local/bin/bw-window recovery-note
