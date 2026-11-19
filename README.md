@@ -20,7 +20,7 @@ The Omarchy package requires Omarchy Shell with the Quickshell plugin API, Hyprl
 
 ### What's in v0.5.0
 
-v0.5.0 is the current release and the default for new installations. The earlier [v1.0.0 release](https://github.com/mateuszruszkowski/bitwarden-window/releases/tag/v1.0.0) stays available and contains the same installer and runtime.
+v0.5.0 is the first release of Bitwarden Window for Omarchy and macOS.
 
 - A **BW** button next to the Omarchy clock or in the macOS menu bar. Unlock once to start a 60-minute countdown on that computer.
 - A `bw-window status` command for other terminals, SSH sessions and local assistants. Source the optional shell helper to use the full CLI in the terminal where you unlock.
