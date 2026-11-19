@@ -1,0 +1,299 @@
+#!/usr/bin/python3 -I
+"""One-hour local Bitwarden broker managed by the systemd user manager."""
+
+import ctypes
+import fcntl
+import importlib.util
+import math
+import os
+from pathlib import Path
+import pwd
+import re
+import resource
+import select
+import socket
+import stat
+import struct
+import subprocess
+import sys
+import threading
+import time
+
+if sys.version_info < (3, 13):
+    sys.exit("Bitwarden window requires system Python 3.13 or later.")
+
+sys.dont_write_bytecode = True
+PROGRAM = Path(__file__).absolute()
+HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
+UNIT = "bw-window.service"
+spec = importlib.util.spec_from_file_location("core", HOME / ".local/lib/bw-window/core.py")
+core = importlib.util.module_from_spec(spec)
+try:
+    spec.loader.exec_module(core)
+except (ImportError, OSError, ValueError):
+    sys.exit("The Bitwarden window installation is incomplete.")
+SOCKET = core.RUNTIME_DIR / "control.sock"
+NULL = subprocess.DEVNULL
+
+
+def manager_env():
+    runtime_dir = f"/run/user/{os.getuid()}"
+    return {**core.bw_env(), "XDG_RUNTIME_DIR": runtime_dir,
+            "DBUS_SESSION_BUS_ADDRESS": "unix:path=" + runtime_dir + "/bus"}
+
+
+def same_user(conn):
+    creds = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("iII"))
+    if struct.unpack("iII", creds)[1] != os.getuid():
+        raise core.Failure("service")
+
+
+def alarm(deadline):
+    fd = os.timerfd_create(time.CLOCK_BOOTTIME)
+    os.timerfd_settime(fd, flags=os.TFD_TIMER_ABSTIME, initial=deadline)
+
+    def expire():
+        try:
+            os.read(fd, 8)
+        finally:
+            os._exit(0)  # systemd terminates the cgroup, then runs ExecStopPost.
+
+    threading.Thread(target=expire, daemon=True).start()
+
+
+def validated_token(raw):
+    token = raw.removesuffix(b"\n").removesuffix(b"\r")
+    if not 0 < len(raw) <= 1024 or not token or any(c <= 32 or c >= 127 for c in token):
+        raise core.Failure("auth")
+    return token
+
+
+def serve(stamp):
+    deadline = core.fresh(stamp) + core.WINDOW_SECONDS
+    alarm(deadline)
+
+    # After resume a request can run before the alarm thread gets scheduled.
+    native = core.native
+    def guarded_native(*args, **kwargs):
+        if core.now() >= deadline:
+            raise core.Failure("expired")
+        result = native(*args, **kwargs)
+        if core.now() >= deadline:
+            raise core.Failure("expired")
+        return result
+    core.native = guarded_native
+
+    token = validated_token(sys.stdin.buffer.readline(1025)).decode("ascii")
+    user = core.account(token)
+    core.runtime()
+    with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as listener:
+        SOCKET.unlink(missing_ok=True)
+        listener.bind(str(SOCKET))
+        os.chmod(SOCKET, 0o600)
+        listener.listen(8)
+        os.write(1, b"READY\n")
+        # If the initiating client dies or times out before authentication, relock.
+        if not select.select([0], [], [], 10)[0] or os.read(0, 1) != b"+":
+            raise core.Failure("closed")
+        os.close(0)
+        os.write(1, b"OPEN\n")
+        os.close(1)
+        while core.now() < deadline:
+            conn, _ = listener.accept()
+            with conn:
+                conn.settimeout(2)
+                try:
+                    same_user(conn)
+                    cmd = conn.recv(32)
+                except (OSError, core.Failure):
+                    continue
+                try:
+                    if cmd == b"status":
+                        response = f"open {deadline}"
+                    elif cmd == b"obsidian":
+                        response = core.escrow(token, user)
+                    else:
+                        response = "service"
+                    if core.now() >= deadline:
+                        raise core.Failure("expired")
+                except core.Failure as exc:
+                    response = str(exc)
+                try:
+                    conn.sendall(response.encode("ascii"))
+                except OSError:
+                    pass
+                if response in ("auth", "expired", "vault"):
+                    return
+
+
+def service_state():
+    result = subprocess.run(["/usr/bin/systemctl", "--user", "show", "-p", "ActiveState",
+                             "--value", UNIT], capture_output=True, timeout=10, env=manager_env())
+    state = result.stdout.strip()
+    if state in (b"inactive", b"failed"):
+        return False
+    if result.returncode or not state:
+        raise core.Failure("service")
+    return True
+
+
+def relock_marker():
+    return core.state_directory() / "relock-required"
+
+
+def relock():
+    try:
+        marker = relock_marker()
+        try:
+            core.reserve(marker)
+        except core.Failure as exc:
+            if str(exc) != "reconcile":
+                raise
+    finally:
+        # Attempt revocation even if the state directory became unavailable.
+        try:
+            core.native(None, "lock")
+        except core.Failure:
+            time.sleep(1)
+            core.native(None, "lock")
+    marker.unlink()
+    core.sync_directory(marker.parent)
+
+
+def stop():
+    if service_state():
+        subprocess.run(["/usr/bin/systemctl", "--user", "stop", UNIT], stdout=NULL, stderr=NULL,
+                       env=manager_env(), timeout=125, check=True)
+        if not relock_marker().exists():
+            return
+    relock()
+
+
+def program_path():
+    # systemd parses ExecStopPost separately from the command's argument vector.
+    # Only this subset needs no specifier, environment or backslash expansion.
+    program = str(PROGRAM)
+    if not re.fullmatch(r"/[a-zA-Z0-9_./ +@-]+", program):
+        raise core.Failure("path")
+    return program
+
+
+def report_open(deadline):
+    remaining = int(deadline - core.now())
+    if remaining <= 0:
+        raise core.Failure("expired")
+    print(f"Bitwarden window open; {remaining} seconds remaining.")
+
+
+def start(stamp, token):
+    deadline = core.fresh(stamp) + core.WINDOW_SECONDS
+    if service_state():
+        raise core.Failure("busy")
+    program = program_path()
+    try:
+        core.reserve(relock_marker())
+    except core.Failure as exc:
+        if str(exc) == "reconcile":
+            raise core.Failure("relock") from None
+        raise
+    command = ["/usr/bin/systemd-run", "--user", "--quiet", "--collect", "--pipe",
+               "--service-type=exec", "--expand-environment=no", "--unit=" + UNIT,
+               "--property=UMask=0077", "--property=LimitCORE=0", "--property=KillMode=control-group",
+               "--property=UnsetEnvironment=BW_SESSION BW_PASSWORD BW_CLIENTSECRET PYTHONPATH LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT",
+               "--property=TimeoutStopSec=115s", f"--property=RuntimeMaxSec={max(1, math.ceil(deadline - core.now()))}s",
+               f'--property=ExecStopPost=/usr/bin/python3 -I "{program}" _relock',
+               "/usr/bin/python3", "-I", program, "_serve", stamp]
+    child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=NULL,
+                             start_new_session=True, env=manager_env())
+    with child.stdin, child.stdout:
+        child.stdin.write(token + b"\n")
+        child.stdin.flush()
+        if not select.select([child.stdout], [], [], 55)[0] or child.stdout.readline() != b"READY\n":
+            raise core.Failure("auth")
+        child.stdin.write(b"+")
+        child.stdin.flush()
+        if not select.select([child.stdout], [], [], 10)[0] or child.stdout.readline() != b"OPEN\n":
+            raise core.Failure("service")
+    report_open(deadline)
+
+
+def request(cmd):
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as client:
+            client.settimeout(240)
+            client.connect(str(SOCKET))
+            same_user(client)
+            client.sendall(cmd.encode())
+            result = client.recv(64).decode("ascii")
+    except (FileNotFoundError, ConnectionRefusedError, ConnectionResetError, BrokenPipeError):
+        raise core.Failure("closed") from None
+    if result in core.MESSAGES:
+        raise core.Failure(result)
+    if cmd == "status" and result.startswith("open ") and result[5:].isascii() and result[5:].isdecimal():
+        report_open(int(result[5:]))
+    elif cmd == "obsidian" and result in ("created", "verified"):
+        print("Personal recovery note created and verified after sync." if result == "created"
+              else "Existing personal recovery note verified after sync.")
+    else:
+        raise core.Failure("service")
+
+
+def main(args):
+    os.umask(0o077)
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    if ctypes.CDLL(None).prctl(4, 0, 0, 0, 0) != 0:  # PR_SET_DUMPABLE
+        raise core.Failure("service")
+    if args and args[0] in ("_serve", "_relock"):
+        groups = Path("/proc/self/cgroup").read_text().splitlines()
+        if not os.environ.get("INVOCATION_ID") or not any(line.endswith("/" + UNIT) for line in groups):
+            raise core.Failure("service")
+    if args == ["now"]:
+        program_path()
+        print(int(core.now()))
+    elif len(args) == 2 and args[0] == "_serve":
+        serve(args[1])
+    elif args == ["_relock"]:
+        try:
+            relock()
+        finally:
+            SOCKET.unlink(missing_ok=True)
+    elif args == ["recovery-note"]:
+        request("obsidian")
+    elif args in (["status"], ["obsidian"]):
+        request(args[0])
+    elif args in (["lock"], ["_recover"]) or (len(args) == 2 and args[0] == "start"):
+        starting = args[0] == "start"
+        if starting:
+            core.fresh(args[1])
+            if sys.stdin.isatty():
+                raise core.Failure("auth")
+            token = validated_token(sys.stdin.buffer.read(1025))
+        core.runtime()
+        fd = os.open(core.RUNTIME_DIR / "start.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "rb"):
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
+                raise core.Failure("service")
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            if starting:
+                start(args[1], token)
+            elif args == ["_recover"]:
+                if relock_marker().exists() and not service_state():
+                    relock()
+            else:
+                stop()
+                print("Bitwarden window closed.")
+    else:
+        print("Usage: bw-window {now|status|recovery-note|lock|start STAMP}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except core.Failure as exc:
+        print(core.MESSAGES.get(str(exc), core.MESSAGES["service"]), file=sys.stderr)
+    except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+        print(core.MESSAGES["service"], file=sys.stderr)
+    sys.exit(1)

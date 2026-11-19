@@ -1,0 +1,8 @@
+[Unit]
+Description=Confirm Bitwarden lock after an interrupted one-hour window
+ConditionPathExists=%h/.local/state/bw-window/relock-required
+[Service]
+Type=oneshot
+ExecStart="%h/.local/bin/bw-window" _recover
+[Install]
+WantedBy=default.target

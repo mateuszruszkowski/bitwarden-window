@@ -1,0 +1,14 @@
+#!/bin/bash
+set -eu
+# The official CLI reads the password from its own tty.
+if [[ ${1-} == --prompt ]]; then
+    "$HOME/.local/bin/bw-unlock" && exit 0
+    echo 'Press Enter to close.'
+    read -r || :
+    exit 1
+fi
+rule='if not bitwarden_window_prompt then bitwarden_window_prompt = hl.window_rule({match = {class = "^org[.]omarchy[.]bitwardenwindow$"}, float = true, center = true, size = {520, 120}}) end'
+hyprctl eval "$rule" >/dev/null || :
+exec ghostty --gtk-single-instance=false --class=org.omarchy.bitwardenwindow \
+    --title='Unlock Bitwarden' --window-save-state=never --window-padding-x=16 \
+    --window-padding-y=16 --confirm-close-surface=false -e "$0" --prompt

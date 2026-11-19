@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+"""Foreground launchd broker and same-user socket client for a one-hour Bitwarden window."""
+
+import ctypes
+import fcntl
+import importlib.util
+import os
+from pathlib import Path
+import resource
+import secrets
+import select
+import signal
+import socket
+import sys
+import threading
+import time
+
+spec = importlib.util.spec_from_file_location("core", Path(__file__).parent.parent / "core.py")
+core = importlib.util.module_from_spec(spec)
+try:
+    spec.loader.exec_module(core)
+except (ImportError, OSError, ValueError):
+    print("Unable to load the Bitwarden window core.", file=sys.stderr)
+    sys.exit(3)
+HOME = core.HOME_DIR
+STATE = HOME / ".local/state/bw-window"
+SOCKET = STATE / "control.sock"
+core.RUNTIME_DIR = STATE
+
+libc = ctypes.CDLL(None)
+libc.mach_continuous_time.restype = ctypes.c_uint64
+timebase = (ctypes.c_uint32 * 2)()
+if libc.mach_timebase_info(timebase) or not all(timebase):
+    sys.exit(3)
+numer, denom = timebase
+
+
+def now():
+    return libc.mach_continuous_time() * numer / (denom * 1_000_000_000)
+
+
+core.now = now
+
+
+def arm_expiry(deadline, retire):
+    # Darwin sys/event.h: absolute mach ticks, continuous through sleep, minimal coalescing.
+    ticks = deadline * 1_000_000_000 * denom // numer
+    timer = select.kevent(1, filter=select.KQ_FILTER_TIMER, flags=select.KQ_EV_ADD,
+                          fflags=0x08 | 0x100 | 0x80 | 0x20, data=ticks)
+    queue = select.kqueue()
+    queue.control([timer], 0, 0)
+
+    def expire():
+        try:
+            queue.control(None, 1, None)
+        finally:
+            retire(1)  # launchd kills in-flight bw and restarts with an unconditional lock.
+
+    threading.Thread(target=expire, daemon=True).start()
+
+
+def same_user(conn):
+    uid = ctypes.c_uint32()
+    gid = ctypes.c_uint32()
+    if libc.getpeereid(conn.fileno(), ctypes.byref(uid), ctypes.byref(gid)) or uid.value != os.getuid():
+        raise core.Failure("service")
+
+
+def receive(conn, limit, timeout):
+    deadline = now() + timeout
+    data = bytearray()
+    while len(data) <= limit:
+        remaining = deadline - now()
+        if remaining <= 0:
+            raise TimeoutError
+        conn.settimeout(remaining)
+        chunk = conn.recv(limit + 1 - len(data))
+        if not chunk:
+            return bytes(data)
+        data.extend(chunk)
+    raise core.Failure("service")
+
+
+class Broker:
+    def __init__(self):
+        self.generation = secrets.token_hex(16)
+        self.operation = threading.Lock()
+        self.token = self.user = None
+        self.deadline = 0
+        self.stopping = False
+        native = core.native
+
+        # A request thread may be scheduled ahead of the timer thread on wake.
+        def native_in_window(*args, **kwargs):
+            self.check_deadline()
+            result = native(*args, **kwargs)
+            self.check_deadline()
+            return result
+
+        core.native = native_in_window
+
+    def retire(self, code):
+        # A concurrent timer or disconnected client must let SIGTERM finish relocking.
+        if not self.stopping:
+            os._exit(code)
+
+    def check_deadline(self):
+        if self.stopping:
+            raise core.Failure("closed")
+        if self.deadline and now() >= self.deadline:
+            self.retire(1)
+            raise core.Failure("expired")
+
+    def dispatch(self, data):
+        command, _, raw = data.partition(b"\n")
+        if command.startswith(b"start "):
+            if self.deadline:
+                raise core.Failure("busy")
+            stamp = core.fresh(command[6:].decode("ascii"))
+            raw = raw.rstrip(b"\r\n")
+            if not 0 < len(raw) <= 1024 or not all(32 < c < 127 for c in raw):
+                raise core.Failure("auth")
+            self.deadline = stamp + core.WINDOW_SECONDS
+            arm_expiry(self.deadline, self.retire)
+            self.token = raw.decode("ascii")
+            self.user = core.account(self.token)
+            return f"open {self.deadline}"
+        if not self.token:
+            raise core.Failure("closed")
+        self.check_deadline()
+        return core.escrow(self.token, self.user)
+
+    def handle(self, conn, saturated=False):
+        with conn:
+            same_user(conn)
+            data = receive(conn, 1060, 5)
+            self.check_deadline()
+            if data == b"status":
+                if self.user is not None:
+                    conn.sendall(f"open {self.deadline}".encode())
+                else:
+                    conn.sendall(b"busy" if self.deadline else b"closed")
+                return
+            if data == b"lock":
+                try:
+                    conn.sendall(f"relocking {self.generation}".encode())
+                finally:
+                    self.retire(0)
+            if data.startswith(b"lock ") and len(data) == 37:
+                previous = data[5:].decode("ascii")
+                conn.sendall(b"waiting" if previous == self.generation else b"locked")
+                return
+            starting = data.startswith(b"start ") and b"\n" in data
+            if not starting and data != b"obsidian":
+                conn.sendall(b"service")
+                return
+            if saturated or (starting and self.deadline):
+                conn.sendall(b"busy")
+                return
+            with self.operation:
+                try:
+                    if starting:
+                        # Maintenance owns this directory lock from its idle check through restart.
+                        parent = os.open(HOME / ".local/lib", os.O_RDONLY | os.O_DIRECTORY)
+                        try:
+                            fcntl.flock(parent, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                            response = self.dispatch(data)
+                        except BlockingIOError:
+                            response = "busy"
+                        finally:
+                            os.close(parent)
+                    else:
+                        response = self.dispatch(data)
+                    self.check_deadline()
+                except core.Failure as exc:
+                    response = str(exc)
+                except Exception:
+                    response = "service"
+                # On failed authentication or an indeterminate vault command, discard this
+                # process before another request can use its session.
+                revoke = self.deadline and (self.user is None or response in ("auth", "expired", "service", "vault"))
+                try:
+                    conn.sendall(response.encode())
+                except OSError:
+                    if starting and response.startswith("open "):
+                        self.retire(1)
+                    raise
+                finally:
+                    if revoke:
+                        self.retire(1)
+
+
+def serve():
+    if os.getppid() != 1 or os.getpgrp() != os.getpid():
+        raise core.Failure("service")
+    STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+    core.runtime()
+    owner = os.open(STATE / "daemon.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    native = core.native
+    native(None, "lock")
+    broker = Broker()
+
+    def stop(signum, frame):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        broker.stopping = True
+        try:
+            if broker.deadline:
+                native(None, "lock")
+        except core.Failure:
+            os._exit(1)
+        os._exit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    slots = threading.BoundedSemaphore(16)
+
+    def handle(conn, saturated=False):
+        try:
+            broker.handle(conn, saturated)
+        except (ValueError, OSError, core.Failure):
+            pass
+        finally:
+            if not saturated:
+                slots.release()
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        SOCKET.unlink(missing_ok=True)
+        listener.bind(str(SOCKET))
+        os.chmod(SOCKET, 0o600)
+        listener.listen()
+        while True:
+            conn, _ = listener.accept()
+            if slots.acquire(blocking=False):
+                threading.Thread(target=handle, args=(conn,), daemon=True).start()
+            else:
+                # Early lock stays available while all operation threads are occupied.
+                handle(conn, saturated=True)
+
+
+class Offline(core.Failure):
+    pass
+
+
+def request(data):
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(240)
+            client.connect(str(SOCKET))
+            same_user(client)
+            client.sendall(data)
+            client.shutdown(socket.SHUT_WR)
+            reply = receive(client, 72, 240).decode("ascii")
+    except (FileNotFoundError, ConnectionRefusedError, ConnectionResetError, BrokenPipeError):
+        raise Offline("service") from None
+    if not reply:
+        raise Offline("service")
+    if reply in core.MESSAGES:
+        raise core.Failure(reply)
+    return reply
+
+
+def lock():
+    prefix, _, generation = request(b"lock").partition(" ")
+    if prefix != "relocking" or len(generation) != 32:
+        raise core.Failure("service")
+    # Only the replacement process, after successful bw lock, can acknowledge.
+    until = now() + 60
+    while now() < until:
+        try:
+            if request(f"lock {generation}".encode()) == "locked":
+                print("Bitwarden window closed.")
+                return
+        except Offline:
+            pass
+        time.sleep(0.1)
+    raise core.Failure("service")
+
+
+def main(args):
+    os.umask(0o077)
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    if args == ["now"]:
+        print(int(now()))
+    elif args == ["_daemon"]:
+        serve()
+    elif args == ["lock"]:
+        lock()
+    elif args in (["obsidian"], ["recovery-note"]):
+        outcome = request(b"obsidian")
+        if outcome not in ("created", "verified"):
+            raise core.Failure("service")
+        print("Personal recovery note created and verified after sync." if outcome == "created"
+              else "Existing personal recovery note verified after sync.")
+    elif args == ["status"] or (len(args) == 2 and args[0] == "start"):
+        if args[0] == "start":
+            stamp = core.fresh(args[1])
+            if sys.stdin.isatty():
+                raise core.Failure("auth")
+            raw = sys.stdin.buffer.read(1025)
+            if not raw or len(raw) > 1024:
+                raise core.Failure("auth")
+            response = request(f"start {stamp}\n".encode() + raw)
+        else:
+            response = request(b"status")
+        prefix, _, deadline = response.partition(" ")
+        if prefix != "open" or not deadline.isdecimal():
+            raise core.Failure("service")
+        remaining = int(deadline) - now()
+        if remaining <= 0:
+            raise core.Failure("expired")
+        if args[0] == "start":
+            print(f"Bitwarden window open until boot-time second {deadline}.")
+        else:
+            print(f"Bitwarden window open; {int(remaining)} seconds remaining.")
+    else:
+        print("Usage: bw-window {now|status|recovery-note|lock|start STAMP}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except core.Failure as exc:
+        print(core.MESSAGES.get(str(exc), core.MESSAGES["service"]), file=sys.stderr)
+        if sys.argv[1:] == ["status"] and str(exc) != "closed":
+            sys.exit(4 if str(exc) == "busy" else 3)
+    except (OSError, ValueError, TypeError):
+        print(core.MESSAGES["service"], file=sys.stderr)
+        sys.exit(3)
+    sys.exit(1)
