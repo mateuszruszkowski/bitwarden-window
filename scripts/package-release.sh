@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: scripts/package-release.sh v1.0.0 /path/to/output
+# Usage: scripts/package-release.sh v0.5.0 /path/to/output
 set -euo pipefail
 if [[ $# != 2 || ! $1 =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo 'Usage: package-release.sh vMAJOR.MINOR.PATCH OUTPUT_DIRECTORY' >&2
@@ -11,7 +11,7 @@ output=$(cd "$2" && pwd)
 cd "$(dirname "$0")/.."
 commit=$(git rev-parse --verify "refs/tags/$tag^{commit}")
 export TZ=UTC
-common=(LICENSE README.md SECURITY.md install.sh uninstall.sh lib tests/test_core.py tests/test_shell.py)
+common=(AGENTS.md LICENSE README.md SECURITY.md install.sh uninstall.sh lib skills tests/test_core.py tests/test_shell.py tests/test_agent_skill.py)
 prefix="bitwarden-window-${tag#v}"
 linux="$prefix-omarchy.tar.gz"
 mac="$prefix-macos.zip"

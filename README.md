@@ -24,6 +24,7 @@ v0.5.0 is the first release of Bitwarden Window for Omarchy and macOS.
 
 - A **BW** button next to the Omarchy clock or in the macOS menu bar. Unlock once to start a 60-minute countdown on that computer.
 - A `bw-window status` command for other terminals, SSH sessions and local assistants. Source the optional shell helper to use the full CLI in the terminal where you unlock.
+- A bundled [Agent Skill](skills/use-bitwarden-window/SKILL.md) for Codex and Claude Code. It teaches the agent to check the timer and handle an explicitly requested recovery-key backup.
 - An optional `bw-window recovery-note` command to create or verify one personal secure note for an age backup key. Unlocking alone never writes a note.
 
 The installer puts the commands in `~/.local/bin`. Use the full paths below if this directory is outside your PATH. Use real directories for `~/.local`, `~/.config` and the parent directories of the recovery identity. The broker rejects symbolic links along these paths.
@@ -100,7 +101,14 @@ If a write loses its reply, the tool reports an ambiguous recovery note and bloc
 
 ## Local automation
 
-Give a local assistant the two commands below instead of a password or `BW_SESSION`.
+The installer registers **`use-bitwarden-window`** under `~/.agents/skills/` for Codex (including Codex sessions in T3) and `~/.claude/skills/` for Claude Code. In a new session on the target computer, try one of these prompts.
+
+| Agent | Example prompt |
+| --- | --- |
+| Codex | `$use-bitwarden-window How many minutes are left on this computer?` |
+| Claude Code | `/use-bitwarden-window Check the timer on this computer.` |
+
+A status request only checks the timer. If the window is closed, unlock locally with **BW** and ask the agent to check again. Ask explicitly to create or verify the configured recovery note. The agent uses the following commands.
 
 | Command | Result |
 | --- | --- |
@@ -111,11 +119,19 @@ A local process with access to your user account can call these operations. The 
 
 ## Update
 
-Close the active window with `~/.local/bin/bw-window lock`. For a downloaded installation, extract the [current release](https://github.com/mateuszruszkowski/bitwarden-window/releases/tag/v0.5.0) into a fresh folder and run its `./install.sh`. For a Git installation, run `git fetch --tags origin` and `git checkout v0.5.0` in your clone, then rerun `./install.sh`. On Omarchy, run `omarchy restart shell` if the bar is still showing the previous widget. Use a stable CLI path such as the Arch `bitwarden-cli` package when possible.
+Close the active window with `~/.local/bin/bw-window lock`. For a downloaded installation, extract the [current release](https://github.com/mateuszruszkowski/bitwarden-window/releases/tag/v0.5.0) into a fresh folder and run its `./install.sh`. The v0.5.0 archives were rebuilt to include the skill. Download the archive and its matching `SHA256SUMS` together. For a Git installation, check that your clean checkout uses this project's GitHub repository as `origin`, then refresh the single release tag and reinstall:
+
+```sh
+git fetch --depth 1 origin +refs/tags/v0.5.0:refs/tags/v0.5.0
+git switch --detach v0.5.0
+./install.sh
+```
+
+On Omarchy, run `omarchy restart shell` if the bar is still showing the previous widget. Use a stable CLI path such as the Arch `bitwarden-cli` package when possible.
 
 ## Remove
 
-Close the active window with `~/.local/bin/bw-window lock`. Run `./uninstall.sh` from the extracted folder or Git checkout for the installed version. On Omarchy the installer uses the user systemd manager. On macOS removal unloads both login agents. Remove any `shell.sh` source line you added to your shell configuration. The personal config in `~/.config/bw-window/`, the recovery records in `~/.local/state/bw-window/`, the age identity and the Bitwarden vault item are preserved.
+Close the active window with `~/.local/bin/bw-window lock`. Run `./uninstall.sh` from the extracted folder or Git checkout for the installed version. On Omarchy the installer uses the user systemd manager. On macOS removal unloads both login agents. Removal cleans up the skill copies installed by the package. Installation, updates and removal preserve existing or locally edited skills with the same name. Linked registry directories are skipped. Remove any `shell.sh` source line you added to your shell configuration. The personal config in `~/.config/bw-window/`, the recovery records in `~/.local/state/bw-window/`, the age identity and the Bitwarden vault item are preserved.
 
 ## Tests
 
