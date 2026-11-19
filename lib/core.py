@@ -30,6 +30,7 @@ MESSAGES = {
     "auth": "The authenticated Bitwarden account or server could not be verified.",
     "config": "Check the local Bitwarden window configuration.",
     "key": "The configured age identity could not be validated.",
+    "https": "Recovery notes require an HTTPS Bitwarden server.",
     "conflict": "An existing item conflicts with the requested personal secure note.",
     "different": "The stored identity differs from the local identity.",
     "duplicate": "Multiple items match the recovery-note title.",
@@ -352,6 +353,8 @@ def escrow(token, user):
     if not isinstance(user, Account):
         raise Failure("auth")
     principal = account(token, user)
+    if not principal.server.startswith("https://"):
+        raise Failure("https")
     identity = principal.configuration.identity
     title = principal.configuration.title
     if identity is None or title is None:

@@ -1,4 +1,5 @@
 """Exercise the public Omarchy installer in a private HOME, without a live desktop."""
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -75,6 +76,21 @@ class InstallTests(unittest.TestCase):
         (cache / "core.cpython-314.pyc").touch()
         self.assertEqual(self.call("uninstall.sh").returncode, 0)
         self.assertEqual(self.call("install.sh").returncode, 0)
+
+    def test_maintenance_respects_auth_and_pending_relock(self):
+        self.assertEqual(self.call("install.sh").returncode, 0)
+        fd = os.open(self.lib.parent, os.O_DIRECTORY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH)
+            self.assertNotEqual(self.call("uninstall.sh").returncode, 0)
+            self.assertNotEqual(self.call("install.sh").returncode, 0)
+        finally:
+            os.close(fd)
+        marker = self.home / ".local/state/bw-window/relock-required"
+        marker.parent.mkdir(parents=True)
+        marker.touch()
+        self.assertNotEqual(self.call("install.sh").returncode, 0)
+        self.assertTrue(self.client.is_file())
 
     def test_foreign_client_is_preserved(self):
         self.client.parent.mkdir(parents=True)

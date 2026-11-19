@@ -16,6 +16,11 @@ if ! grep -qxF 'bitwarden-window/v1' "$lib/.bitwarden-window-public" 2>/dev/null
     if [ -e "$f" ] || [ -L "$f" ]; then echo "Existing installation at $f; nothing overwritten." >&2; exit 1; fi
   done
 fi
+if [ "$platform" = omarchy ]; then
+  mkdir -p "$HOME/.local/lib"
+  exec 9<"$HOME/.local/lib"
+  flock -nx 9 || { echo 'An unlock or installation is in progress.' >&2; exit 1; }
+fi
 "./$platform/install.sh"
 python3 -I lib/install-shell.py
 echo 'Open BW in the menu bar, or run ~/.local/bin/bw-unlock in a terminal.'

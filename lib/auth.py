@@ -23,6 +23,12 @@ def main():
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     os.umask(0o077)
     home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    # Share the installation lock before reading paths or invoking a native CLI.
+    maintenance = os.open(home / ".local/lib", os.O_DIRECTORY | os.O_RDONLY)
+    try:
+        fcntl.flock(maintenance, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit("An installation is in progress.")
     settings = json.loads((home / ".local/lib/bw-window/paths.json").read_text())
     native = Path(settings["bw"])
     broker = home / ".local/bin/bw-window"

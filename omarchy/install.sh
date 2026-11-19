@@ -25,17 +25,20 @@ if ! grep -Fxq bitwarden-window/v1 "$lib/$marker" 2>/dev/null; then
 elif [[ -e $plugin ]] && ! grep -Fxq bitwarden-window/v1 "$plugin/$marker" 2>/dev/null; then
   echo 'Conflicting plugin directory.' >&2; exit 1
 fi
-if systemctl --user is-active --quiet bw-window.service; then
+if [[ -e $HOME/.local/state/bw-window/relock-required ]] || systemctl --user is-active --quiet bw-window.service; then
   echo 'Run ~/.local/bin/bw-window lock before updating.' >&2; exit 1
 fi
 fresh_plugin=true
 [[ ! -e "$plugin/$marker" ]] || fresh_plugin=false
 if [[ -L $unit ]] || { [[ -e $unit ]] && ! cmp -s bw-window-relock.service "$unit"; }; then echo "Existing user unit at $unit." >&2; exit 1; fi
+staged_paths=$(mktemp)
+trap 'rm -f "$staged_paths"' EXIT
+/usr/bin/python3 -I ../lib/install-paths.py "$staged_paths" "$(type -P bw)" "$(type -P age-keygen || :)"
 mkdir -p "$lib" "$HOME/.local/bin" "${plugin%/*}" "${unit%/*}"
 printf '%s\n' bitwarden-window/v1 > "$lib/$marker"
 install -m 600 ../lib/core.py "$lib/core.py"
 install -m 700 bw-window "$client"
-/usr/bin/python3 -I ../lib/install-paths.py "$lib/paths.json" "$(type -P bw)" "$(type -P age-keygen || :)"
+install -m 600 "$staged_paths" "$lib/paths.json"
 install -m 600 bw-window-relock.service "$unit"
 systemctl --user daemon-reload
 systemctl --user enable bw-window-relock.service

@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 import tempfile
 from urllib.parse import urlsplit
@@ -31,6 +32,13 @@ def cli_environment():
 
 if __name__ == "__main__":
     dest, bw, age = sys.argv[1:]
+    for executable in (bw, age):
+        if not executable:
+            continue
+        meta = os.stat(executable)
+        if (not stat.S_ISREG(meta.st_mode) or meta.st_uid not in (0, os.getuid())
+                or meta.st_mode & 0o022 or not os.access(executable, os.X_OK)):
+            raise SystemExit(f"Choose an executable owned by you or root and writable only by its owner: {executable}")
     settings = dict(bw=os.path.abspath(bw), age_keygen=os.path.abspath(age) if age else None,
                     python=sys.executable, cli_env=cli_environment())
     with tempfile.NamedTemporaryFile(mode="w", dir=Path(dest).parent, delete=False) as handle:

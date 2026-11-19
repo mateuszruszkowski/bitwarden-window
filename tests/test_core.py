@@ -231,7 +231,7 @@ class TestCore(Fixture):
         self.identity()
         for url, normalized, user_id in [
                 ("https://VAULT.bitwarden.eu:443/", "https://vault.bitwarden.eu", "first"),
-                ("http://LOCALHOST:8080/vault/", "http://localhost:8080/vault", "second")]:
+                ("https://EXAMPLE.invalid:8443/vault/", "https://example.invalid:8443/vault", "second")]:
             with self.subTest(url=url):
                 self.state["status"].update(serverUrl=url, userId=user_id)
                 self.save_state()
@@ -240,6 +240,15 @@ class TestCore(Fixture):
                 self.assertEqual(str(user), user_id)
                 self.assertEqual(self.escrow(user), "created")
                 (self.home / "items").unlink()  # separate synthetic vaults
+
+    def test_recovery_requires_https(self):
+        self.configure()
+        self.state["status"]["serverUrl"] = "http://fixture.invalid"
+        self.save_state()
+        with patch.object(self.core, "read_identity", side_effect=AssertionError):
+            with self.assertRaisesRegex(self.core.Failure, "^https$"):
+                self.escrow(self.principal())
+        self.assertNotIn("create", self.calls())
 
     def test_unknown_option_is_reported(self):
         self.configure(server_urll="https://example.invalid")

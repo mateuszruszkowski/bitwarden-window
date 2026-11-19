@@ -6,7 +6,10 @@ lib="$HOME/.local/lib/bw-window"
 [ ! -L "$lib" ] && [ ! -L "$lib/.bitwarden-window-public" ] && grep -qxF 'bitwarden-window/v1' "$lib/.bitwarden-window-public" 2>/dev/null || { echo 'No owned installation found.' >&2; exit 1; }
 case $(uname -s) in
  Darwin) ./osx/uninstall.sh ;;
- Linux) ./omarchy/uninstall.sh ;;
+ Linux)
+   exec 9<"$HOME/.local/lib"
+   flock -nx 9 || { echo 'An unlock or installation is in progress.' >&2; exit 1; }
+   ./omarchy/uninstall.sh ;;
  *) exit 2 ;;
 esac
 rm -f "$HOME/.local/bin/bw-unlock" "$lib/auth.py" "$lib/shell.sh" "$lib/native-bw"

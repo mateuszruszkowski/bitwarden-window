@@ -264,6 +264,11 @@ def main(args):
     elif args in (["lock"], ["_recover"]) or (len(args) == 2 and args[0] == "start"):
         starting = args[0] == "start"
         if starting:
+            maintenance = os.open(HOME / ".local/lib", os.O_DIRECTORY | os.O_RDONLY)
+            try:
+                fcntl.flock(maintenance, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise core.Failure("busy") from None
             core.fresh(args[1])
             if sys.stdin.isatty():
                 raise core.Failure("auth")
