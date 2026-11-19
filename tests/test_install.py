@@ -44,12 +44,18 @@ class InstallTests(unittest.TestCase):
         self.assertTrue(self.client.is_file())
         self.assertTrue((self.home / ".local/bin/bw-unlock").is_file())
         self.assertTrue((self.lib / "native-bw").samefile(self.bin / "bw"))
+        skills = [self.home / name / "skills/use-bitwarden-window" for name in (".agents", ".claude")]
+        for skill in skills:
+            self.assertEqual((skill / "SKILL.md").read_bytes(),
+                             (ROOT / "skills/use-bitwarden-window/SKILL.md").read_bytes())
         config = self.home / ".config/bw-window/config.json"
         config.parent.mkdir(parents=True, exist_ok=True)
         config.write_text("{}")
         result = self.call("uninstall.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.client.exists())
+        for skill in skills:
+            self.assertFalse(os.path.lexists(skill))
         self.assertFalse((self.home / ".local/bin/bw-unlock").exists())
         self.assertEqual(config.read_text(), "{}")
 

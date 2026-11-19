@@ -3,6 +3,10 @@ set -eu
 cd "$(dirname "$0")"
 [ "$#" = 0 ] || { echo 'Usage: ./uninstall.sh' >&2; exit 2; }
 lib="$HOME/.local/lib/bw-window"
+# An interrupted or manual removal may have left only the independent skill copies.
+if [ ! -e "$lib/.bitwarden-window-public" ] && [ ! -L "$lib/.bitwarden-window-public" ]; then
+  python3 -I lib/agent-skill.py uninstall
+fi
 [ ! -L "$lib" ] && [ ! -L "$lib/.bitwarden-window-public" ] && grep -qxF 'bitwarden-window/v1' "$lib/.bitwarden-window-public" 2>/dev/null || { echo 'No owned installation found.' >&2; exit 1; }
 case $(uname -s) in
  Darwin) ./osx/uninstall.sh ;;
@@ -12,6 +16,7 @@ case $(uname -s) in
    ./omarchy/uninstall.sh ;;
  *) exit 2 ;;
 esac
+python3 -I lib/agent-skill.py uninstall
 rm -f "$HOME/.local/bin/bw-unlock" "$lib/auth.py" "$lib/shell.sh" "$lib/native-bw"
 # Remove only bytecode for modules this installer owns.
 for cache in "$lib"/__pycache__/core.cpython-*.pyc "$lib"/__pycache__/auth.cpython-*.pyc; do

@@ -93,6 +93,7 @@ class MacInstall(unittest.TestCase):
         for name in ("install.sh", "uninstall.sh"):
             shutil.copy2(ROOT / name, self.src / name)
         shutil.copytree(ROOT / "lib", self.src / "lib")
+        shutil.copytree(ROOT / "skills", self.src / "skills")
         # Substitute only the account home for the common core's passwd lookup.
         # The assertion also prevents contacting a real CLI if that contract changes.
         core = (ROOT / "lib/core.py").read_text()
@@ -156,6 +157,10 @@ assert str(BW) == os.path.join(os.environ["HOME"], "Tools With Spaces", "bw")
         self.client.unlink()
 
         self.invoke(self.install)
+        skills = [self.home / name / "skills/use-bitwarden-window" for name in (".agents", ".claude")]
+        for skill in skills:
+            self.assertEqual((skill / "SKILL.md").read_bytes(),
+                             (ROOT / "skills/use-bitwarden-window/SKILL.md").read_bytes())
         binaries = json.loads((self.lib / "paths.json").read_text())
         self.assertEqual(binaries["bw"], str(self.bin / "bw"))
         self.assertIsNone(binaries["age_keygen"])
@@ -198,6 +203,8 @@ assert str(BW) == os.path.join(os.environ["HOME"], "Tools With Spaces", "bw")
         self.invoke(self.uninstall)
         self.invoke(self.src / "osx/uninstall.sh")
         self.assertFalse(os.path.lexists(self.client))
+        for skill in skills:
+            self.assertFalse(os.path.lexists(skill))
         self.assertFalse(self.lib.exists())
         self.assertEqual(json.loads(self.config.read_text())["server_url"], "https://fixture.invalid")
 
