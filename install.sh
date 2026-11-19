@@ -24,4 +24,5 @@ if [ "$platform" = omarchy ]; then
 fi
 "./$platform/install.sh"
 python3 -I lib/install-shell.py
+python3 -I lib/agent-skill.py install
 echo 'Open BW in the menu bar, or run ~/.local/bin/bw-unlock in a terminal.'
