@@ -106,7 +106,7 @@ def stage_install(stage):
         binaries.append(Path(age))
     for binary in binaries:
         st = binary.stat()
-        if not stat.S_ISREG(st.st_mode) or st.st_uid not in (0, os.getuid()) or st.st_mode & 0o002:
+        if not stat.S_ISREG(st.st_mode) or st.st_uid not in (0, os.getuid()) or st.st_mode & 0o022:
             sys.exit(f"Unsafe executable: {binary}")
     def probe(*args):
         return sp.check_output([bw, *args], env=bw_env, stdin=sp.DEVNULL, timeout=30, text=True).strip()
