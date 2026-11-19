@@ -10,12 +10,23 @@ Install from a terminal in your Omarchy desktop session. The installer puts **BW
 
 ## Install
 
-Start in a desktop session as the user who will use the menu. Install the [official Bitwarden CLI](https://bitwarden.com/help/cli/) and log in with `bw login`. The window uses the account and server already selected in the CLI, including EU and self-hosted accounts.
+**[Download for Omarchy (.tar.gz)](https://github.com/mateuszruszkowski/bitwarden-window/releases/download/v1.0.0/bitwarden-window-1.0.0-omarchy.tar.gz)** · **[Download for macOS (.zip)](https://github.com/mateuszruszkowski/bitwarden-window/releases/download/v1.0.0/bitwarden-window-1.0.0-macos.zip)** · [Release notes and SHA-256 checksums](https://github.com/mateuszruszkowski/bitwarden-window/releases/tag/v1.0.0)
 
-| Platform | Requirements | Interface |
-| --- | --- | --- |
-| Omarchy | Omarchy Shell with the Quickshell plugin API, Hyprland (Lua rules for automatic centering), Ghostty, user systemd, system Python 3.13+ | **BW** next to the clock |
-| macOS | macOS 13+, a graphical login, a non-system Python 3.10+ on PATH and a Swift 6 compiler (Xcode or Command Line Tools) | Native **BW** menu bar item and secure password field |
+1. Install the [official Bitwarden CLI](https://bitwarden.com/help/cli/) and sign in with `bw login`. If you already use the CLI, keep your current account and server.
+2. Download and extract the archive for your desktop. On macOS, double-click the ZIP in Finder. On Omarchy, choose **Extract Here** in the file manager.
+3. Open a terminal in the extracted folder and run `./install.sh` as your usual desktop user. Use the same shell and profile where you use `bw`. Keep the folder for `./uninstall.sh`.
+
+The Omarchy package requires Omarchy Shell with the Quickshell plugin API, Hyprland, Ghostty, user systemd and system Python 3.13+. The macOS package requires macOS 13+, a graphical login, a non-system Python 3.10+ on PATH and Swift 6 from Xcode or the Command Line Tools. Its installer builds the native menu app locally and starts it at graphical login.
+
+### What's in v1.0.0
+
+- A **BW** button next to the Omarchy clock or in the macOS menu bar. Unlock once to start a 60-minute countdown on that computer.
+- A `bw-window status` command for other terminals, SSH sessions and local assistants. Source the optional shell helper to use the full CLI in the terminal where you unlock.
+- An optional `bw-window recovery-note` command to create or verify one personal secure note for an age backup key. Unlocking alone never writes a note.
+
+The installer puts the commands in `~/.local/bin`. Use the full paths below if this directory is outside your PATH. Use real directories for `~/.local`, `~/.config` and the parent directories of the recovery identity. The broker rejects symbolic links along these paths.
+
+### Install from Git
 
 ```sh
 git clone --branch omarchy https://github.com/mateuszruszkowski/bitwarden-window.git
@@ -23,9 +34,7 @@ cd bitwarden-window
 ./install.sh
 ```
 
-Run the installer from the same shell and profile where you use the official CLI. It installs under your home directory. The macOS menu and service start at graphical login. If `bw-window` is missing from your shell's PATH, use `~/.local/bin/bw-window` directly, or add `~/.local/bin` to PATH. The [Omarchy branch](https://github.com/mateuszruszkowski/bitwarden-window/tree/omarchy) and [macOS branch](https://github.com/mateuszruszkowski/bitwarden-window/tree/osx) include a platform-specific quick start. Use the root installer on all three branches so you get both the widget and its background service.
-
-Use real directories for `~/.local`, `~/.config` and the parent directories of the recovery identity. The broker rejects symbolic links along these paths.
+The platform branches include their own quick starts. [Omarchy](https://github.com/mateuszruszkowski/bitwarden-window/tree/omarchy) · [macOS](https://github.com/mateuszruszkowski/bitwarden-window/tree/osx)
 
 ## Account and server
 
@@ -94,11 +103,11 @@ A local process with access to your user account can call these operations. The 
 
 ## Update
 
-From the cloned repository, close the active window with `~/.local/bin/bw-window lock`, run `git pull --ff-only` and rerun `./install.sh`. On Omarchy, run `omarchy restart shell` if the bar is still showing the previous widget. Use a stable CLI path such as the Arch `bitwarden-cli` package when possible.
+Close the active window with `~/.local/bin/bw-window lock`. For a downloaded installation, extract the [latest release](https://github.com/mateuszruszkowski/bitwarden-window/releases/latest) into a fresh folder and run its `./install.sh`. For a Git installation, run `git pull --ff-only` in your clone and rerun `./install.sh`. On Omarchy, run `omarchy restart shell` if the bar is still showing the previous widget. Use a stable CLI path such as the Arch `bitwarden-cli` package when possible.
 
 ## Remove
 
-From the same checkout, run `./uninstall.sh`. Close the active window first. On Omarchy the installer uses the user systemd manager. On macOS removal unloads both login agents. Remove any `shell.sh` source line you added to your shell configuration. The personal config in `~/.config/bw-window/`, the recovery records in `~/.local/state/bw-window/`, the age identity and the Bitwarden vault item are preserved.
+Close the active window with `~/.local/bin/bw-window lock`. Run `./uninstall.sh` from the extracted folder or Git checkout for the installed version. On Omarchy the installer uses the user systemd manager. On macOS removal unloads both login agents. Remove any `shell.sh` source line you added to your shell configuration. The personal config in `~/.config/bw-window/`, the recovery records in `~/.local/state/bw-window/`, the age identity and the Bitwarden vault item are preserved.
 
 ## Tests
 
