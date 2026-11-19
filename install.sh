@@ -3,6 +3,7 @@ set -eu
 cd "$(dirname "$0")"
 if [ "$#" -gt 0 ]; then echo 'Usage: ./install.sh' >&2; exit 2; fi
 if [ "$(id -u)" = 0 ]; then echo 'Install as your own user, without sudo.' >&2; exit 1; fi
+[ "$(uname -s)" = Darwin ] || { echo "This branch installs Bitwarden Window on macOS. Use main for another platform." >&2; exit 2; }
 case $(uname -s) in
   Darwin) platform=osx ;;
   Linux) platform=omarchy ;;

@@ -1,8 +1,12 @@
-# Bitwarden Window
+# Bitwarden Window for macOS
 
 A menu-bar countdown for the official Bitwarden CLI on **Omarchy Linux** and **macOS**. Click **BW**, unlock once, and see how many minutes remain. The window lasts one hour from authentication, including time spent asleep. Using it from another terminal does not reset the timer.
 
 Use it when a shell script or local assistant needs to check whether the vault is open, or to back up one dedicated age recovery key. The scoped client never returns the session token or the contents of a vault item. This is an independent project, unaffiliated with Bitwarden, Omarchy or age.
+
+## macOS quick start
+
+The native menu app and its broker start at graphical login. After installation click **BW** in the macOS menu bar. Use `~/.local/bin/bw-window status` from Terminal or from an SSH session under the same login.
 
 ## Install
 
@@ -14,7 +18,7 @@ Start in a desktop session as the user who will use the menu. Install the [offic
 | macOS | macOS 13+, a graphical login, a non-system Python 3.10+ on PATH and a Swift 6 compiler (Xcode or Command Line Tools) | Native **BW** menu bar item and secure password field |
 
 ```sh
-git clone https://github.com/mateuszruszkowski/bitwarden-window.git
+git clone --branch osx https://github.com/mateuszruszkowski/bitwarden-window.git
 cd bitwarden-window
 ./install.sh
 ```
