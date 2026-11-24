@@ -20,6 +20,11 @@ HOME_DIR = Path(pwd.getpwuid(os.getuid()).pw_dir)
 RUNTIME_DIR = Path("/run/user") / str(os.getuid()) / "bw-window"
 WINDOW_SECONDS = 3600
 US_SERVER = "https://vault.bitwarden.com"
+# Bitwarden accepts about 3.6 KiB of plaintext in one encrypted password field.
+SECRET_LIMIT = 3072
+# UTF-8 byte limits of one `save` request. JSON escaping at most doubles them.
+LOGIN_LIMITS = {"name": 256, "secret": SECRET_LIMIT, "username": 256, "uri": 2048, "notes": 4096}
+REQUEST_LIMIT = 32768
 MESSAGES = {
     "closed": "Bitwarden window closed or session unavailable.",
     "expired": "The authentication window expired.",
@@ -30,12 +35,15 @@ MESSAGES = {
     "auth": "The authenticated Bitwarden account or server could not be verified.",
     "config": "Check the local Bitwarden window configuration.",
     "key": "The configured age identity could not be validated.",
-    "https": "Recovery notes require an HTTPS Bitwarden server.",
-    "conflict": "An existing item conflicts with the requested personal secure note.",
+    "https": "Vault writes require an HTTPS Bitwarden server.",
+    "conflict": "An existing vault item conflicts with the requested personal item.",
     "different": "The stored identity differs from the local identity.",
-    "duplicate": "Multiple items match the recovery-note title.",
+    "duplicate": "Multiple vault items match the requested name.",
     "vault": "Bitwarden could not complete the operation.",
-    "verify": "The recovery note could not be verified after sync.",
+    "verify": "The vault item could not be verified after sync.",
+    "input": f"Pipe one non-empty line of printable text, at most {SECRET_LIMIT} bytes, on standard input.",
+    "item": "Use a printable item name and metadata within the documented limits.",
+    "usage": "Usage: bw-window save NAME [--username USER] [--uri URL] [--notes-file FILE] < SECRET",
     "path": "Use a Linux installation path containing only ASCII letters, digits, spaces, or /._+@-.",
     "service": "The local Bitwarden window service could not complete the request.",
 }
@@ -404,4 +412,117 @@ def escrow(token, user):
     if known is None:
         confirm_id(record, item_id)
     record_verification()
+    return outcome
+
+
+def login_fields(values):
+    """Validate one save request. Errors are fixed codes that never echo its content."""
+    if not isinstance(values, dict) or values.keys() != LOGIN_LIMITS.keys():
+        raise Failure("item")
+    for key, limit in LOGIN_LIMITS.items():
+        value = values[key]
+        if value is None and key in ("username", "uri", "notes"):
+            continue
+        if (not isinstance(value, str) or not value
+                or not all(c.isprintable() or (key == "notes" and c in "\t\n") for c in value)
+                or len(value.encode()) > limit):
+            raise Failure("input" if key == "secret" else "item")
+    name = values["name"]
+    if name.strip() != name or name.startswith("-") or " " in (values["uri"] or ""):
+        raise Failure("item")
+    return values
+
+
+def save_request(args):
+    """Client side of save. The secret is read only from piped standard input."""
+    options = {"--username": "username", "--uri": "uri", "--notes-file": "notes"}
+    values = dict.fromkeys(LOGIN_LIMITS)
+    args = list(args)
+    while args:
+        arg = args.pop(0)
+        if arg in options and args and values[options[arg]] is None:
+            values[options[arg]] = args.pop(0)
+        elif arg not in options and values["name"] is None:
+            values["name"] = arg
+        else:
+            raise Failure("usage")
+    if values["name"] is None:
+        raise Failure("usage")
+    if values["notes"] is not None:
+        try:
+            with open(values["notes"], "rb") as handle:
+                values["notes"] = handle.read(LOGIN_LIMITS["notes"] + 2).decode().removesuffix("\n")
+        except (OSError, ValueError):
+            raise Failure("item") from None
+    if sys.stdin is None or sys.stdin.isatty():
+        raise Failure("input")
+    # A read shorter than requested is the whole input; allow one trailing line ending.
+    raw = sys.stdin.buffer.read(SECRET_LIMIT + 3)
+    if len(raw) > SECRET_LIMIT + 2:
+        raise Failure("input")
+    try:
+        values["secret"] = raw.decode().removesuffix("\n").removesuffix("\r")
+    except ValueError:
+        raise Failure("input") from None
+    return json.dumps(login_fields(values), ensure_ascii=False).encode()
+
+
+def verify_login(item, values):
+    """Require the requested name and secret, and every metadata field the caller supplied."""
+    if (not isinstance(item, dict) or item.get("name") != values["name"] or item.get("type") != 1
+            or item.get("organizationId") is not None or item.get("deletedDate")
+            or item.get("archivedDate") or not isinstance(item.get("id"), str) or not item["id"]
+            or item["id"].startswith("-") or not isinstance(item.get("login"), dict)):
+        raise Failure("conflict")
+    login = item["login"]
+    uris = login.get("uris") or []
+    if (not isinstance(login.get("password"), str) or not isinstance(uris, list)
+            or not hmac.compare_digest(login["password"].encode(), values["secret"].encode())
+            or (values["username"] is not None and login.get("username") != values["username"])
+            or (values["notes"] is not None and item.get("notes") != values["notes"])
+            or (values["uri"] is not None
+                and [isinstance(uri, dict) and uri.get("uri") for uri in uris] != [values["uri"]])):
+        raise Failure("conflict")
+    return item["id"]
+
+
+def save(token, user, data):
+    """Create one personal login item or verify an identical one. Never edit or return it."""
+    if not isinstance(user, Account):
+        raise Failure("auth")
+    try:
+        if len(data) > REQUEST_LIMIT:
+            raise ValueError
+        values = login_fields(json.loads(data))
+    except (ValueError, RecursionError):
+        raise Failure("item") from None
+    principal = account(token, user)
+    if not principal.server.startswith("https://"):
+        raise Failure("https")
+
+    def call(*args, **kwargs):
+        account(token, principal)
+        return native(token, *args, **kwargs)
+
+    # No durable intent record: after a lost create reply, a retry with the same
+    # input finds the item and verifies it.
+    call("sync")
+    item = find_note(call, values["name"])
+    if item is None:
+        login = {"username": values["username"], "password": values["secret"],
+                 "uris": [{"uri": values["uri"], "match": None}] if values["uri"] else []}
+        payload = {"type": 1, "name": values["name"], "notes": values["notes"], "login": login,
+                   "organizationId": None}
+        item = call("create", "item", data=base64.b64encode(json.dumps(payload).encode()), as_json=True)
+        outcome = "created"
+    else:
+        outcome = "verified"
+    item_id = verify_login(item, values)
+    call("sync")
+    current = find_note(call, values["name"])
+    if current is None or verify_login(current, values) != item_id:
+        raise Failure("verify")
+    if verify_login(call("get", "item", item_id, as_json=True), values) != item_id:
+        raise Failure("verify")
+    account(token, principal)
     return outcome

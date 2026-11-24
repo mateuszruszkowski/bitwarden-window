@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "community.bitwarden-window",
   "name": "Bitwarden Window",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": "Bitwarden Window contributors",
   "description": "A one-hour Bitwarden CLI window with a countdown in the bar",
   "kinds": [

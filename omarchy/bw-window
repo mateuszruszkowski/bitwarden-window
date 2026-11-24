@@ -104,7 +104,8 @@ def serve(stamp):
                 conn.settimeout(2)
                 try:
                     same_user(conn)
-                    cmd = conn.recv(32)
+                    # One datagram per request. Only save carries data; core.save rejects truncation.
+                    cmd = conn.recv(core.REQUEST_LIMIT + 6)
                 except (OSError, core.Failure):
                     continue
                 try:
@@ -112,6 +113,8 @@ def serve(stamp):
                         response = f"open {deadline}"
                     elif cmd == b"obsidian":
                         response = core.escrow(token, user)
+                    elif cmd.startswith(b"save\n"):
+                        response = core.save(token, user, cmd[5:])
                     else:
                         response = "service"
                     if core.now() >= deadline:
@@ -217,13 +220,13 @@ def start(stamp, token):
     report_open(deadline)
 
 
-def request(cmd):
+def request(cmd, data=b""):
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as client:
             client.settimeout(240)
             client.connect(str(SOCKET))
             same_user(client)
-            client.sendall(cmd.encode())
+            client.sendall(cmd.encode() + data)
             result = client.recv(64).decode("ascii")
     except (FileNotFoundError, ConnectionRefusedError, ConnectionResetError, BrokenPipeError):
         raise core.Failure("closed") from None
@@ -234,6 +237,9 @@ def request(cmd):
     elif cmd == "obsidian" and result in ("created", "verified"):
         print("Personal recovery note created and verified after sync." if result == "created"
               else "Existing personal recovery note verified after sync.")
+    elif cmd == "save" and result in ("created", "verified"):
+        print("Personal login item created and verified after sync." if result == "created"
+              else "Existing personal login item verified after sync.")
     else:
         raise core.Failure("service")
 
@@ -261,6 +267,8 @@ def main(args):
         request("obsidian")
     elif args in (["status"], ["obsidian"]):
         request(args[0])
+    elif args[:1] == ["save"]:
+        request("save", b"\n" + core.save_request(args[1:]))
     elif args in (["lock"], ["_recover"]) or (len(args) == 2 and args[0] == "start"):
         starting = args[0] == "start"
         if starting:
@@ -289,7 +297,7 @@ def main(args):
                 stop()
                 print("Bitwarden window closed.")
     else:
-        print("Usage: bw-window {now|status|recovery-note|lock|start STAMP}", file=sys.stderr)
+        print("Usage: bw-window {now|status|recovery-note|save NAME|lock|start STAMP}", file=sys.stderr)
         return 2
     return 0
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: scripts/package-release.sh v0.5.0 /path/to/output
+# Usage: scripts/package-release.sh v0.6.0 /path/to/output
 set -euo pipefail
 if [[ $# != 2 || ! $1 =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo 'Usage: package-release.sh vMAJOR.MINOR.PATCH OUTPUT_DIRECTORY' >&2

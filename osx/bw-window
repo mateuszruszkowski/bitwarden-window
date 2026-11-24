@@ -128,12 +128,18 @@ class Broker:
         if not self.token:
             raise core.Failure("closed")
         self.check_deadline()
+        if command == b"save":
+            return core.save(self.token, self.user, raw)
         return core.escrow(self.token, self.user)
 
     def handle(self, conn, saturated=False):
         with conn:
             same_user(conn)
-            data = receive(conn, 1060, 5)
+            # Only save may exceed the original request limit.
+            data = receive(conn, core.REQUEST_LIMIT + 5, 5)
+            saving = data.startswith(b"save\n")
+            if len(data) > 1060 and not saving:
+                raise core.Failure("service")
             self.check_deadline()
             if data == b"status":
                 if self.user is not None:
@@ -151,7 +157,7 @@ class Broker:
                 conn.sendall(b"waiting" if previous == self.generation else b"locked")
                 return
             starting = data.startswith(b"start ") and b"\n" in data
-            if not starting and data != b"obsidian":
+            if not starting and not saving and data != b"obsidian":
                 conn.sendall(b"service")
                 return
             if saturated or (starting and self.deadline):
@@ -291,6 +297,12 @@ def main(args):
             raise core.Failure("service")
         print("Personal recovery note created and verified after sync." if outcome == "created"
               else "Existing personal recovery note verified after sync.")
+    elif args[:1] == ["save"]:
+        outcome = request(b"save\n" + core.save_request(args[1:]))
+        if outcome not in ("created", "verified"):
+            raise core.Failure("service")
+        print("Personal login item created and verified after sync." if outcome == "created"
+              else "Existing personal login item verified after sync.")
     elif args == ["status"] or (len(args) == 2 and args[0] == "start"):
         if args[0] == "start":
             stamp = core.fresh(args[1])
@@ -313,7 +325,7 @@ def main(args):
         else:
             print(f"Bitwarden window open; {int(remaining)} seconds remaining.")
     else:
-        print("Usage: bw-window {now|status|recovery-note|lock|start STAMP}", file=sys.stderr)
+        print("Usage: bw-window {now|status|recovery-note|save NAME|lock|start STAMP}", file=sys.stderr)
         return 2
     return 0
 

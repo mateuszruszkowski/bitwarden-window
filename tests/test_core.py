@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import pty
 import pwd
 import runpy
 import socket
@@ -24,9 +25,10 @@ from uuid import uuid4
 ROOT = Path(__file__).absolute().parents[1]
 TITLE = "Fixture recovery"
 TOKEN = b"fixture-session"
+SECRET = "fixture-api-key-7f3a"  # gitleaks:allow (synthetic fixture)
 
 # The stand-in recognizes only the commands the public interface needs. Record
-# command names (never stdin or the session) for assertions across processes.
+# command names and arguments (never stdin or the session) for assertions across processes.
 FAKE_BW = '''#!/usr/bin/python3 -I
 import base64, json, os, sys, time
 from pathlib import Path
@@ -37,6 +39,8 @@ assert args.pop(0) == "--nointeraction"
 cmd = args[0]
 with (home / "calls").open("a") as f:
     f.write(cmd + "\\n")
+with (home / "argv").open("a") as f:
+    f.write(json.dumps(sys.argv) + "\\n")
 state = json.loads((home / "state").read_text())
 if cmd == "lock":
     if state.get("lock_fails"):
@@ -129,6 +133,11 @@ class Fixture(unittest.TestCase):
     def calls(self):
         path = self.home / "calls"
         return path.read_text().splitlines() if path.exists() else []
+
+    def save(self, user, **fields):
+        values = {"name": "Fixture login", "secret": SECRET, "username": None, "uri": None, "notes": None,
+                  **fields}
+        return self.core.save(TOKEN.decode(), user, json.dumps(values).encode())
 
 
 class TestCore(Fixture):
@@ -381,6 +390,78 @@ class TestCore(Fixture):
         with self.assertRaisesRegex(core.Failure, "^config$"):
             core.settings()
 
+    def test_save_creates_then_verifies_a_personal_login(self):
+        user = self.principal()
+        meta = {"username": "bot", "uri": "https://example.invalid/login", "notes": "first\n\tsecond"}
+        self.assertEqual(self.save(user, **meta), "created")
+        self.assertEqual(self.save(user, **meta), "verified")
+        self.assertEqual(self.save(user), "verified")  # omitted metadata is not compared
+        self.assertEqual(self.calls().count("create"), 1)
+        [item] = json.loads((self.home / "items").read_text())
+        self.assertEqual((item["type"], item["organizationId"], item["name"], item["notes"]),
+                         (1, None, "Fixture login", meta["notes"]))
+        self.assertEqual(item["login"], {"username": "bot", "password": SECRET,
+                                         "uris": [{"uri": meta["uri"], "match": None}]})
+        self.assertNotIn(SECRET, (self.home / "argv").read_text())
+        self.assertFalse((self.home / ".local/state").exists())
+
+    def test_save_never_changes_a_conflicting_item(self):
+        user = self.principal()
+        path = self.home / "items"
+        item = {"id": "fixture-item", "type": 1, "name": "Fixture login", "notes": None,
+                "login": {"username": "bot", "password": SECRET, "uris": []}}
+        for active, additions, fields, error in [
+                ([dict(item, login={"password": "other"})], {}, {}, "conflict"),
+                ([item], {}, {"username": "someone"}, "conflict"),
+                ([item], {}, {"uri": "https://example.invalid"}, "conflict"),
+                ([item], {}, {"notes": "other"}, "conflict"),
+                ([dict(item, type=2)], {}, {}, "conflict"),
+                ([dict(item, name="FIXTURE LOGIN")], {}, {}, "conflict"),
+                ([dict(item, organizationId="org")], {}, {}, "conflict"),
+                ([item, item], {}, {}, "duplicate"),
+                ([], {"trash": [item]}, {}, "conflict"), ([], {"archive": [item]}, {}, "conflict")]:
+            with self.subTest(fields=fields, error=error):
+                path.write_text(json.dumps(active))
+                self.state = {"status": self.state["status"], **additions}
+                self.save_state()
+                with self.assertRaisesRegex(self.core.Failure, "^" + error + "$"):
+                    self.save(user, **fields)
+                self.assertEqual(json.loads(path.read_text()), active)
+        self.assertNotIn("create", self.calls())
+
+    def test_save_rejects_invalid_requests_before_any_vault_call(self):
+        user = self.principal()
+        calls = self.calls()
+        for fields, error in [
+                ({"secret": ""}, "input"), ({"secret": "two\nlines"}, "input"), ({"secret": None}, "input"),
+                ({"secret": "x" * (self.core.SECRET_LIMIT + 1)}, "input"),
+                ({"name": ""}, "item"), ({"name": "-flag"}, "item"), ({"name": " padded"}, "item"),
+                ({"name": "\u0142" * 129}, "item"), ({"username": ""}, "item"),
+                ({"uri": "https://a b"}, "item"), ({"notes": "bell\a"}, "item"), ({"extra": "field"}, "item")]:
+            with self.subTest(fields=fields):
+                with self.assertRaisesRegex(self.core.Failure, "^" + error + "$"):
+                    self.save(user, **fields)
+        with self.assertRaisesRegex(self.core.Failure, "^item$"):
+            self.core.save(TOKEN.decode(), user, b"not json")
+        self.assertEqual(self.calls(), calls)
+
+    def test_save_rechecks_account_and_requires_https(self):
+        user = self.principal()
+        find = self.core.find_note
+        def switch(call, name):
+            item = find(call, name)
+            self.state["status"]["userId"] = "other"
+            self.save_state()
+            return item
+        with patch.object(self.core, "find_note", side_effect=switch):
+            with self.assertRaisesRegex(self.core.Failure, "^auth$"):
+                self.save(user)
+        self.state["status"].update(userId="fixture-id", serverUrl="http://fixture.invalid")
+        self.save_state()
+        with self.assertRaisesRegex(self.core.Failure, "^https$"):
+            self.save(self.principal())
+        self.assertNotIn("create", self.calls())
+
 
 @unittest.skipUnless(sys.platform == "linux" and sys.version_info >= (3, 13), "Linux system Python >=3.13")
 class TestLinuxService(Fixture):
@@ -520,6 +601,41 @@ except g["core"].Failure as exc:
             self.assertNotIn(b"AGE-", result.stdout + result.stderr)
             self.assertNotIn(TOKEN, result.stdout + result.stderr)
         self.assertEqual(self.calls().count("create"), 1)
+
+    def test_cli_save_reads_the_secret_only_from_piped_stdin(self):
+        secret = SECRET.encode()
+        self.assertIn(b"closed", self.cli("save", "Fixture login", data=secret).stderr)
+        self.open_window()
+        for args, data, message in [
+                (("save",), secret, b"Usage: bw-window save NAME"),
+                (("save", "Fixture login", "--password", "x"), secret, b"Usage:"),
+                (("save", "Fixture login"), b"", b"standard input"),
+                (("save", "Fixture login"), b"x" * (self.core.SECRET_LIMIT + 3), b"standard input"),
+                (("save", "-flag"), secret, b"item name")]:
+            with self.subTest(args=args):
+                result = self.cli(*args, data=data)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(message, result.stderr)
+        primary, secondary = pty.openpty()
+        with os.fdopen(primary, "rb"), os.fdopen(secondary, "rb") as terminal:
+            result = subprocess.run([self.launcher, "save", "Fixture login"], stdin=terminal,
+                                    capture_output=True, timeout=75)
+        self.assertIn(b"standard input", result.stderr)
+        self.assertEqual(self.calls(), ["status"])
+        notes = self.home / "notes.txt"
+        notes.write_text("first line\nsecond line\n")
+        for expected in (b"Personal login item created", b"Existing personal login item verified"):
+            result = self.cli("save", "Fixture login", "--username", "bot", "--uri", "https://example.invalid",
+                              "--notes-file", str(notes), data=secret + b"\n")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(result.stdout.startswith(expected))
+            self.assertNotIn(secret, result.stdout + result.stderr)
+        self.assertIn(b"conflicts", self.cli("save", "Fixture login", data=b"other secret").stderr)
+        [item] = json.loads((self.home / "items").read_text())
+        self.assertEqual((item["notes"], item["login"]["password"]), ("first line\nsecond line", SECRET))
+        self.assertEqual(self.calls().count("create"), 1)
+        self.assertNotIn(SECRET, (self.home / "argv").read_text())
+        self.assertEqual(self.cli("status").returncode, 0)
 
     def test_crash_relocks(self):
         self.open_window()

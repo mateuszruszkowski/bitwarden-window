@@ -228,6 +228,24 @@ assert str(BW) == os.path.join(os.environ["HOME"], "Tools With Spaces", "bw")
         self.assertTrue(identity.exists())
         self.assertTrue(note.exists())
 
+    def test_explicit_save(self):
+        self.invoke(self.install)
+        self.invoke(self.menu, "--test-unlock", data=self.password)
+        item = self.home / "fixture-item.json"
+        secret = b"synthetic-api-key"
+        for data, message in ((secret + b"\n", b"created and verified"), (secret, b"Existing personal login")):
+            result = self.invoke(self.client, "save", "Fixture login", data=data)
+            self.assertIn(message, result.stdout)
+            self.assertNotIn(secret, result.stdout + result.stderr)
+        self.assertEqual(json.loads(item.read_text())["login"]["password"], secret.decode())
+        self.assertIn(b"conflicts", self.invoke(self.client, "save", "Fixture login", data=b"other",
+                                                success=False).stderr)
+        self.assertIn(b"standard input", self.invoke(self.client, "save", "Fixture login", data=b"",
+                                                     success=False).stderr)
+        self.invoke(self.client, "status")
+        self.invoke(self.client, "lock")
+        self.invoke(self.uninstall)
+
     def test_bootout_relocks(self):
         self.invoke(self.install)
         self.invoke(self.menu, "--test-unlock", data=self.password)
