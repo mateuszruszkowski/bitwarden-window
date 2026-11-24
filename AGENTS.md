@@ -1,6 +1,6 @@
 # Installing Bitwarden Window for a user
 
-Use the **v0.6.0** release on the target computer, in the user's graphical login session and usual Bitwarden CLI profile. The root installer selects Omarchy or macOS. Use the user's normal permissions. [README and downloads](README.md#install)
+Use the **v0.7.0** release on the target computer, in the user's graphical login session and usual Bitwarden CLI profile. The root installer selects Omarchy or macOS. Use the user's normal permissions. [README and downloads](README.md#install)
 
 ## Before installation
 
@@ -10,7 +10,7 @@ Use the **v0.6.0** release on the target computer, in the user's graphical login
 
 ## Install
 
-For a fresh checkout, run the pinned command in the [README](README.md#install-with-a-coding-agent). If you already extracted the v0.6.0 archive for this platform, run `./install.sh` from its root. This installs the menu, background service, CLI and the [use-bitwarden-window skill](skills/use-bitwarden-window/SKILL.md). Keep the directory for `./uninstall.sh`.
+For a fresh checkout, run the pinned command in the [README](README.md#install-with-a-coding-agent). If you already extracted the v0.7.0 archive for this platform, run `./install.sh` from its root. This installs the menu, background service, CLI and the [use-bitwarden-window skill](skills/use-bitwarden-window/SKILL.md). Keep the directory for `./uninstall.sh`.
 
 ## Verify
 
@@ -25,4 +25,4 @@ Check that `~/.agents/skills/use-bitwarden-window/SKILL.md` (Codex) and `~/.clau
 
 For a live unlock test, the user clicks **BW** and enters their password locally. Check `status` again from a separate terminal. Agents use the scoped client without sourcing the full-CLI shell helper or requesting the master password or `BW_SESSION`.
 
-Run `~/.local/bin/bw-window recovery-note` only when the user requests a backup or verification of the configured age key. It can create a personal vault item. Report success only on exit 0 and keep the key and vault contents out of output. Run `~/.local/bin/bw-window save NAME` only when the user explicitly asks to store a secret, with the secret piped on standard input and kept out of output.
+Run `~/.local/bin/bw-window recovery-note` only when the user requests a backup or verification of the configured age key. It can create a personal vault item. Report success only on exit 0 and keep the key and vault contents out of output. Run `~/.local/bin/bw-window save NAME` only when the user explicitly asks to store a secret, with the secret piped on standard input and kept out of output. Use `~/.local/bin/bw-window get NAME` only for names the user listed in `keyring_items`, and pass its output to the consuming command through a pipe or `$(...)` without printing it. Do not add names to `keyring_items` unless the user asks.

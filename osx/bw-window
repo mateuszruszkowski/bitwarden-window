@@ -194,6 +194,11 @@ class Broker:
                 finally:
                     if revoke:
                         self.retire(1)
+                if starting and response.startswith("open "):
+                    # The client reads until EOF. Later vault requests wait on the operation
+                    # lock until this copy finishes.
+                    conn.close()
+                    core.sync_keyring(self.token, self.user)
 
 
 def serve():
@@ -324,8 +329,12 @@ def main(args):
             print(f"Bitwarden window open until boot-time second {deadline}.")
         else:
             print(f"Bitwarden window open; {int(remaining)} seconds remaining.")
+            if summary := core.keyring_summary():
+                print(summary)
+    elif len(args) == 2 and args[0] == "get":
+        core.keyring_get(args[1])
     else:
-        print("Usage: bw-window {now|status|recovery-note|save NAME|lock|start STAMP}", file=sys.stderr)
+        print("Usage: bw-window {now|status|get NAME|recovery-note|save NAME|lock|start STAMP}", file=sys.stderr)
         return 2
     return 0
 

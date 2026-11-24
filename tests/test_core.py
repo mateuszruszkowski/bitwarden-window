@@ -1,6 +1,7 @@
 """Public fixtures only. No test calls the installed Bitwarden CLI."""
 
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -82,6 +83,69 @@ print(json.dumps(result))
 '''
 
 
+# Stand-ins for /usr/bin/security and /usr/bin/secret-tool with their observed exit codes.
+# They record argv (never stdin) so tests can prove the value travels only on stdin.
+FAKE_KEYRING = '''#!/usr/bin/python3 -I
+import json, os, shlex, sys
+from pathlib import Path
+home = Path(os.environ["HOME"])
+args = sys.argv[1:]
+with (home / "keyring-argv").open("a") as f:
+    f.write(json.dumps(sys.argv) + "\\n")
+store = home / "keyring-store"
+values = json.loads(store.read_text()) if store.exists() else {}
+mode = json.loads((home / "keyring-mode").read_text()) if (home / "keyring-mode").exists() else {}
+def save():
+    store.write_text(json.dumps(values))
+if Path(sys.argv[0]).name == "security":
+    if args == ["-i"]:
+        words = shlex.split(sys.stdin.read())
+        assert words[:2] == ["add-generic-password", "-U"] and len(words) == 10, words
+        svc, name, secret = words[3], words[5], bytes.fromhex(words[9]).decode()
+        if name in mode.get("fail", []):
+            sys.exit(1)
+        values[svc + "/" + name] = secret[:-1] if name in mode.get("corrupt", []) else secret
+        save()
+        sys.exit()
+    key = args[2] + "/" + args[4]
+    if args[0] == "find-generic-password" and args[5:] == ["-w"]:
+        if key not in values:
+            sys.exit(44)
+        print(values[key])
+    elif args[0] == "delete-generic-password" and len(args) == 5:
+        if key not in values:
+            sys.exit(44)
+        del values[key]
+        save()
+    else:
+        sys.exit(2)
+else:
+    cmd = args.pop(0)
+    if cmd == "store":
+        assert args[0].startswith("--label=")
+        args.pop(0)
+    assert args[0] == "service" and args[2] == "account" and len(args) == 4, args
+    key, name = args[1] + "/" + args[3], args[3]
+    if cmd == "store":
+        secret = sys.stdin.read()
+        if name in mode.get("fail", []):
+            sys.exit(1)
+        values[key] = secret[:-1] if name in mode.get("corrupt", []) else secret
+        save()
+    elif cmd == "lookup":
+        if key not in values:
+            sys.exit(1)
+        sys.stdout.write(values[key])
+    elif cmd == "clear":
+        if key not in values:
+            sys.exit(1)  # libsecret's secret-tool: nothing removed, no output.
+        del values[key]
+        save()
+    else:
+        sys.exit(2)
+'''
+
+
 class Fixture(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -100,6 +164,11 @@ class Fixture(unittest.TestCase):
         self.paths = self.lib / "paths.json"
         self.paths.write_text(json.dumps({"bw": str(self.bw), "age_keygen": self.age}))
         shutil.copyfile(ROOT / "lib/core.py", self.lib / "core.py")
+        self.tools = self.home / "keyring-tools"
+        self.tools.mkdir()
+        for name in ("security", "secret-tool"):
+            (self.tools / name).write_text(FAKE_KEYRING)
+            (self.tools / name).chmod(0o700)
         self.state = {"status": {"status": "unlocked", "serverUrl": None, "userId": "fixture-id"}}
         self.save_state()
         self.core = self.load_core()
@@ -113,6 +182,8 @@ class Fixture(unittest.TestCase):
         with patch.object(pwd, "getpwuid", return_value=SimpleNamespace(pw_dir=str(self.home))):
             spec.loader.exec_module(module)
         module.RUNTIME_DIR = self.runtime
+        module.Keychain.tool = str(self.tools / "security")
+        module.SecretService.tool = str(self.tools / "secret-tool")
         return module
 
     def configure(self, **extra):
@@ -463,6 +534,152 @@ class TestCore(Fixture):
         self.assertNotIn("create", self.calls())
 
 
+class TestKeyring(Fixture):
+    NAMES = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta #1; $HOME 'x' ąę"]
+    TRICKY = NAMES[-1]
+    OTHER = "fixture-other-value-91c2"  # gitleaks:allow (synthetic fixture)
+
+    def setUp(self):
+        super().setUp()
+        self.write_items(SECRET)
+
+    def write_items(self, alpha, tricky=OTHER):
+        def login(name, password, **extra):
+            return {"id": name, "type": 1, "name": name, "login": {"password": password}, **extra}
+        items = [login("Alpha", alpha), login("alpha", "case-variant"), login("Gamma", "a" * 8),
+                 dict(login("Gamma", "b" * 8), id="Gamma-2"),
+                 {"id": "Delta", "type": 2, "name": "Delta"}, login("Epsilon", "zażółć"),
+                 login("Beta", "trashed", deletedDate="2026-01-01"), login(self.TRICKY, tricky),
+                 login("Alphabet", "unrelated")]
+        (self.home / "items").write_text(json.dumps(items))
+
+    def stored(self):
+        store = self.home / "keyring-store"
+        values = json.loads(store.read_text()) if store.exists() else {}
+        return {key.partition("/")[2]: value for key, value in values.items()}
+
+    def results(self):
+        return json.loads((self.home / ".local/state/bw-window/keyring.json").read_text())
+
+    def sync(self, names=NAMES):
+        self.configure(keyring_items=names)
+        self.core.sync_keyring(TOKEN.decode(), self.principal())
+
+    def get(self, name):
+        out = io.StringIO()
+        with patch.object(sys, "stdout", out):
+            self.core.keyring_get(name)
+        return out.getvalue()
+
+    def assert_no_leak(self, *secrets):
+        files = [self.home / "keyring-argv", self.home / "argv", self.home / ".local/state/bw-window/keyring.json"]
+        for file in files:
+            for secret in secrets:
+                self.assertNotIn(secret, file.read_text(), file.name)
+                self.assertNotIn(secret.encode().hex(), file.read_text(), file.name)
+
+    def test_names_are_validated(self):
+        for names in ("Alpha", ["Alpha", "Alpha"], [""], [" Alpha"], ["-Alpha"], ['Al"pha'], ["Al\\pha"],
+                      ["Al\npha"], [1], ["x" * 129], [str(i) for i in range(33)]):
+            self.configure(keyring_items=names)
+            with self.assertRaisesRegex(self.core.Failure, "^config$"):
+                self.core.settings()
+        self.configure(keyring_items=[])
+        self.assertEqual(self.core.settings().keyring, ())
+
+    def test_disabled_without_names(self):
+        for extra in ({}, {"keyring_items": []}):
+            self.configure(**extra)
+            user = self.principal()
+            calls = self.calls()
+            self.core.sync_keyring(TOKEN.decode(), user)
+            self.assertEqual(self.calls(), calls)
+            self.assertFalse((self.home / "keyring-argv").exists())
+            self.assertFalse((self.home / ".local/state/bw-window/keyring.json").exists())
+            self.assertIsNone(self.core.keyring_summary())
+            with self.assertRaisesRegex(self.core.Failure, "^unlisted$"):
+                self.core.keyring_get("Alpha")
+        # The summary is optional and never turns a timer report into an error.
+        self.configure(keyring_items="Alpha")
+        self.assertEqual(self.core.keyring_summary(), "Keyring: sync status unavailable.")
+
+    def test_sync_get_update_and_delist(self):
+        for backend in (self.core.Keychain, self.core.SecretService):
+            with self.subTest(backend=backend.__name__), patch.object(self.core, "keyring", backend):
+                for path in ("keyring-store", "keyring-argv", ".local/state/bw-window/keyring.json"):
+                    (self.home / path).unlink(missing_ok=True)
+                self.write_items(SECRET)
+                # A value the vault no longer confirms must not survive the next unlock.
+                (self.home / "keyring-store").write_text(json.dumps({"bitwarden-window/Beta": "stale"}))
+                self.sync()
+                self.assertEqual(self.stored(), {"Alpha": SECRET, self.TRICKY: self.OTHER})
+                self.assertEqual(self.results()["results"], {
+                    "Alpha": "synced", "Beta": "missing", "Gamma": "duplicate", "Delta": "unsupported",
+                    "Epsilon": "unsupported", self.TRICKY: "synced"})
+                self.assertEqual(self.get("Alpha"), SECRET)
+                self.assertEqual(self.get(self.TRICKY), self.OTHER)
+                with self.assertRaisesRegex(self.core.Failure, "^keyring$"):
+                    self.core.keyring_get("Beta")
+                with self.assertRaisesRegex(self.core.Failure, "^unlisted$"):
+                    self.core.keyring_get("Alphabet")
+                self.assertEqual(self.core.keyring_summary(),
+                                 "Keyring: 2 of 6 listed items synced at the last unlock; not synced: "
+                                 "Beta (missing), Gamma (duplicate), Delta (unsupported), Epsilon (unsupported).")
+                self.assertIn("sync", self.calls())
+
+                changed = "fixture-rotated-value-55d0"  # gitleaks:allow (synthetic fixture)
+                self.write_items(changed)
+                self.sync(["Beta", "Alpha"])
+                self.assertEqual(self.stored(), {"Alpha": changed})
+                self.assertEqual(self.results()["tracked"], ["Alpha"])
+                self.assertEqual(self.get("Alpha"), changed)
+                self.assertEqual(self.core.keyring_summary(),
+                                 "Keyring: 1 of 2 listed items synced at the last unlock; not synced: Beta (missing).")
+                self.assert_no_leak(SECRET, self.OTHER, changed)
+
+                self.sync([])
+                self.assertEqual(self.stored(), {})
+                self.assertEqual(self.results(), {"tracked": [], "results": {}})
+
+    def test_failures_never_break_unlock_or_serve_unverified_values(self):
+        for backend in (self.core.Keychain, self.core.SecretService):
+            with self.subTest(backend=backend.__name__), patch.object(self.core, "keyring", backend):
+                for path in ("keyring-store", "keyring-mode", ".local/state/bw-window/keyring.json"):
+                    (self.home / path).unlink(missing_ok=True)
+                self.state.pop("list_error", None)
+                self.save_state()
+                self.sync(["Alpha"])
+                self.assertEqual(self.get("Alpha"), SECRET)
+
+                # A vault failure keeps the previous copy and reports it.
+                self.state["list_error"] = True
+                self.save_state()
+                self.sync(["Alpha"])
+                self.assertEqual(self.results()["results"], {"Alpha": "vault"})
+                self.assertEqual(self.stored(), {"Alpha": SECRET})
+                self.state.pop("list_error")
+                self.save_state()
+
+                # A failed or unverifiable write removes the entry instead of serving it.
+                for mode in ("fail", "corrupt"):
+                    (self.home / "keyring-mode").write_text(json.dumps({mode: ["Alpha"]}))
+                    self.sync(["Alpha", self.TRICKY])
+                    self.assertEqual(self.results()["results"], {"Alpha": "keyring", self.TRICKY: "synced"})
+                    self.assertNotIn("Alpha", self.stored())
+                    with self.assertRaisesRegex(self.core.Failure, "^keyring$"):
+                        self.core.keyring_get("Alpha")
+                (self.home / "keyring-mode").unlink()
+
+                with patch.object(backend, "tool", str(self.home / "absent")):
+                    self.sync(["Alpha"])
+                    self.assertEqual(self.results()["results"], {"Alpha": "keyring"})
+                    with self.assertRaisesRegex(self.core.Failure, "^keyring$"):
+                        self.core.keyring_get("Alpha")
+                with patch.object(self.core, "write_keyring_state", side_effect=OSError):
+                    self.sync(["Alpha"])
+                self.assert_no_leak(SECRET)
+
+
 @unittest.skipUnless(sys.platform == "linux" and sys.version_info >= (3, 13), "Linux system Python >=3.13")
 class TestLinuxService(Fixture):
     def setUp(self):
@@ -487,6 +704,7 @@ g["UNIT"] = {self.unit!r}
 g["PROGRAM"] = Path(__file__)
 g["core"].RUNTIME_DIR = Path({str(self.runtime)!r})
 g["SOCKET"] = g["core"].RUNTIME_DIR / "control.sock"
+g["core"].SecretService.tool = {str(self.tools / 'secret-tool')!r}
 short = Path({str(self.home / 'short')!r})
 if short.exists():
     g["core"].WINDOW_SECONDS = 5
@@ -535,6 +753,26 @@ except g["core"].Failure as exc:
         locked = self.cli("lock")
         self.assertEqual(locked.returncode, 0, locked.stderr)
         self.assert_relocked()
+
+    def test_keyring_copy_outlives_the_window(self):
+        self.configure(keyring_items=["Alpha", "Beta"])
+        (self.home / "items").write_text(json.dumps([{"id": "a", "type": 1, "name": "Alpha",
+                                                      "login": {"password": SECRET}}]))
+        self.open_window()
+        status = self.cli("status")
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertTrue(status.stdout.endswith(b"\nKeyring: 1 of 2 listed items synced at the last unlock; "
+                                               b"not synced: Beta (missing).\n"), status.stdout)
+        self.assertEqual(self.cli("lock").returncode, 0)
+        self.assert_relocked()
+        got = self.cli("get", "Alpha")
+        self.assertEqual((got.returncode, got.stdout), (0, SECRET.encode()), got.stderr)
+        for name, message in (("Beta", b"keyring"), ("Gamma", b"keyring_items")):
+            missing = self.cli("get", name)
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertEqual(missing.stdout, b"")
+            self.assertIn(message, missing.stderr)
+        self.assertNotIn(SECRET, (self.home / "keyring-argv").read_text())
 
     def test_login_recovery_ignores_live_window_and_relocks_after_interruption(self):
         self.open_window()

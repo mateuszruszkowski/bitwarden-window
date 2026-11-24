@@ -25,6 +25,11 @@ SECRET_LIMIT = 3072
 # UTF-8 byte limits of one `save` request. JSON escaping at most doubles them.
 LOGIN_LIMITS = {"name": 256, "secret": SECRET_LIMIT, "username": 256, "uri": 2048, "notes": 4096}
 REQUEST_LIMIT = 32768
+# Keyring entries are generic passwords of this service, one account per configured item name.
+KEYRING_SERVICE = "bitwarden-window"
+# Two hex digits per byte must stay well within one `security -i` input line.
+KEYRING_SECRET_LIMIT = 1024
+KEYRING_STATUS = ("synced", "missing", "duplicate", "unsupported", "keyring", "vault")
 MESSAGES = {
     "closed": "Bitwarden window closed or session unavailable.",
     "expired": "The authentication window expired.",
@@ -46,6 +51,8 @@ MESSAGES = {
     "usage": "Usage: bw-window save NAME [--username USER] [--uri URL] [--notes-file FILE] < SECRET",
     "path": "Use a Linux installation path containing only ASCII letters, digits, spaces, or /._+@-.",
     "service": "The local Bitwarden window service could not complete the request.",
+    "unlisted": "This name is not listed in keyring_items of the local configuration.",
+    "keyring": "No synced value for this name is available in the system keyring.",
 }
 
 
@@ -129,6 +136,7 @@ class Settings(NamedTuple):
     server: str | None
     identity: Path | None
     title: str | None
+    keyring: tuple = ()
 
 
 def server_url(value):
@@ -147,6 +155,20 @@ def server_url(value):
     return f"{parts.scheme}://{host}" + parts.path.rstrip("/")
 
 
+def keyring_names(value):
+    # Names also appear inside a quoted `security -i` argument and as secret-tool attributes.
+    if not isinstance(value, list) or len(value) > 32:
+        raise ValueError
+    names = []
+    for name in value:
+        if (not isinstance(name, str) or not 0 < len(name) <= 128 or not name.isprintable()
+                or name.strip() != name or name.startswith("-") or '"' in name or "\\" in name
+                or name in names):
+            raise ValueError
+        names.append(name)
+    return tuple(names)
+
+
 def settings():
     path = HOME_DIR / ".config/bw-window/config.json"
     try:
@@ -154,7 +176,8 @@ def settings():
             values = json.loads(read_file(path, 16384))
         except FileNotFoundError:
             values = {}
-        if not isinstance(values, dict) or values.keys() - {"server_url", "identity_file", "note_title"}:
+        if not isinstance(values, dict) or values.keys() - {"server_url", "identity_file", "note_title",
+                                                             "keyring_items"}:
             raise ValueError
         server = server_url(values["server_url"]) if "server_url" in values else None
         if server is not None and not server.startswith("https://"):
@@ -168,7 +191,7 @@ def settings():
         if title is not None and (not isinstance(title, str) or not title or len(title) > 256
                                   or not title.isprintable() or title.strip() != title or title.startswith("-")):
             raise ValueError
-        return Settings(server, identity, title)
+        return Settings(server, identity, title, keyring_names(values.get("keyring_items", [])))
     except (AttributeError, TypeError, ValueError, OSError, RecursionError):
         raise Failure("config") from None
 
@@ -526,3 +549,208 @@ def save(token, user, data):
         raise Failure("verify")
     account(token, principal)
     return outcome
+
+
+def keyring_env():
+    env = {"HOME": str(HOME_DIR), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+    if sys.platform != "darwin":
+        runtime_dir = f"/run/user/{os.getuid()}"
+        env["XDG_RUNTIME_DIR"] = runtime_dir
+        env["DBUS_SESSION_BUS_ADDRESS"] = (os.environ.get("DBUS_SESSION_BUS_ADDRESS")
+                                           or "unix:path=" + runtime_dir + "/bus")
+    return env
+
+
+def keyring_run(args, data=b"", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL):
+    # A new session has no controlling terminal, so no tool can prompt on one. A locked
+    # keyring that waits for a desktop prompt ends in the timeout.
+    try:
+        return subprocess.run(args, input=data, stdout=stdout, stderr=stderr, env=keyring_env(),
+                              timeout=20, start_new_session=True)
+    except (OSError, subprocess.SubprocessError):
+        raise Failure("keyring") from None
+
+
+class Keychain:
+    """macOS login keychain through /usr/bin/security. The secret only travels on stdin."""
+
+    tool = "/usr/bin/security"
+
+    def store(self, name, secret):
+        # `-w` as the last option reads stdin but silently truncates at 128 bytes, so the
+        # interactive mode receives the whole command, with the value as hex, on stdin.
+        command = (f'add-generic-password -U -s {KEYRING_SERVICE} -a "{name}" -l "{name}" '
+                   f"-X {secret.encode('ascii').hex()}\n")
+        if keyring_run([self.tool, "-i"], command.encode()).returncode:
+            raise Failure("keyring")
+
+    def lookup(self, name):
+        result = keyring_run([self.tool, "find-generic-password", "-s", KEYRING_SERVICE, "-a", name, "-w"],
+                             stdout=subprocess.PIPE)
+        if result.returncode == 44:  # errSecItemNotFound
+            return None
+        if result.returncode or not result.stdout.endswith(b"\n"):
+            raise Failure("keyring")
+        return result.stdout[:-1].decode("ascii")
+
+    def clear(self, name):
+        if keyring_run([self.tool, "delete-generic-password", "-s", KEYRING_SERVICE,
+                        "-a", name]).returncode not in (0, 44):
+            raise Failure("keyring")
+
+
+class SecretService:
+    """Freedesktop Secret Service through libsecret's secret-tool, which reads the secret from stdin."""
+
+    tool = "/usr/bin/secret-tool"
+
+    def store(self, name, secret):
+        if keyring_run([self.tool, "store", f"--label=Bitwarden Window: {name}", "service", KEYRING_SERVICE,
+                        "account", name], secret.encode("ascii")).returncode:
+            raise Failure("keyring")
+
+    def lookup(self, name):
+        result = keyring_run([self.tool, "lookup", "service", KEYRING_SERVICE, "account", name],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode:
+            if result.stdout or result.stderr:
+                raise Failure("keyring")
+            return None  # A missing entry exits 1 without output.
+        return result.stdout.decode("ascii")
+
+    def clear(self, name):
+        result = keyring_run([self.tool, "clear", "service", KEYRING_SERVICE, "account", name],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # Clearing a missing entry exits 1 without output.
+        if result.returncode and (result.returncode != 1 or result.stdout or result.stderr):
+            raise Failure("keyring")
+
+
+def keyring():
+    return Keychain() if sys.platform == "darwin" else SecretService()
+
+
+def keyring_state_path():
+    return state_directory() / "keyring.json"
+
+
+def keyring_state():
+    try:
+        state = json.loads(read_file(keyring_state_path(), 65536, private=True))
+        tracked, results = state["tracked"], state["results"]
+        if (not isinstance(tracked, list) or not all(isinstance(name, str) for name in tracked)
+                or not isinstance(results, dict) or not all(value in KEYRING_STATUS for value in results.values())):
+            raise ValueError
+        return tracked, results
+    except FileNotFoundError:
+        return [], {}
+    except (KeyError, OSError, ValueError, TypeError, RecursionError):
+        raise Failure("service") from None
+
+
+def write_keyring_state(tracked, results):
+    """Names and outcomes only. Tracked names are entries this tool may still hold."""
+    directory = state_directory()
+    with tempfile.NamedTemporaryFile(mode="w", dir=directory, delete=False) as handle:
+        json.dump({"tracked": sorted(tracked), "results": results}, handle)
+    os.replace(handle.name, directory / "keyring.json")
+    sync_directory(directory)
+
+
+def keyring_password(token, name):
+    items = native(token, "list", "items", "--search", name, as_json=True)
+    if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+        raise Failure("vault")
+    # Exact names only, so a case variant in a shared collection cannot stand in for the item.
+    matches = [item for item in items if item.get("name") == name and not item.get("deletedDate")]
+    if not matches:
+        return "missing", None
+    if len(matches) > 1:
+        return "duplicate", None
+    item = matches[0]
+    password = item.get("login").get("password") if isinstance(item.get("login"), dict) else None
+    if (item.get("type") != 1 or not isinstance(password, str) or not password
+            or len(password) > KEYRING_SECRET_LIMIT or not all(32 <= ord(c) < 127 for c in password)):
+        return "unsupported", None
+    return "synced", password
+
+
+def sync_keyring(token, user):
+    """Copy each configured login password into the system keyring after an unlock.
+
+    Never raises: the optional copy must not fail the unlock. Outcomes are fixed codes
+    and item names; no value is returned, logged or written outside the keyring.
+    """
+    try:
+        names = user.configuration.keyring
+        tracked, _ = keyring_state()
+        if not names and not tracked:
+            return
+        backend = keyring()
+        # Record intent first, so an interrupted run still removes delisted entries later.
+        tracked = set(tracked) | set(names)
+        results = {}
+        write_keyring_state(tracked, results)
+        for name in sorted(tracked - set(names)):
+            try:
+                backend.clear(name)
+                tracked.discard(name)
+            except Failure:
+                pass
+        try:
+            account(token, user)
+            if names:
+                native(token, "sync")
+        except Failure:
+            results = dict.fromkeys(names, "vault")  # Keep the previous values.
+            names = ()
+        for name in names:
+            try:
+                outcome, password = keyring_password(token, name)
+            except Failure:
+                results[name] = "vault"
+                continue
+            try:
+                if password is not None:
+                    backend.store(name, password)
+                    stored = backend.lookup(name)
+                    if stored is None or not hmac.compare_digest(stored.encode(), password.encode()):
+                        raise Failure("keyring")
+                else:
+                    backend.clear(name)  # Never serve a value the vault no longer confirms.
+                    tracked.discard(name)
+            except Failure:
+                outcome = "keyring"
+                try:
+                    backend.clear(name)
+                except Failure:
+                    pass
+            results[name] = outcome
+        write_keyring_state(tracked, results)
+    except Exception:
+        pass
+
+
+def keyring_summary():
+    # An optional line: a bad config or state file must not change the timer's exit status.
+    try:
+        names = settings().keyring
+        if not names:
+            return None
+        _, results = keyring_state()
+    except Failure:
+        return "Keyring: sync status unavailable."
+    failed = [f"{name} ({results.get(name, 'pending')})" for name in names if results.get(name) != "synced"]
+    line = f"Keyring: {len(names) - len(failed)} of {len(names)} listed items synced at the last unlock"
+    return line + ("; not synced: " + ", ".join(failed) + "." if failed else ".")
+
+
+def keyring_get(name):
+    """Print one synced value for a configured name. Works while the vault is locked."""
+    if name not in settings().keyring:
+        raise Failure("unlisted")
+    value = keyring().lookup(name)
+    if not value:
+        raise Failure("keyring")
+    sys.stdout.write(value)  # No trailing newline: `$(bw-window get NAME)` and pipes get the exact value.
+    sys.stdout.flush()

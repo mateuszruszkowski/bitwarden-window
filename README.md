@@ -6,7 +6,7 @@ Use it when a shell script or local assistant needs to check whether the vault i
 
 ## Install
 
-**[Download for Omarchy (.tar.gz)](https://github.com/mateuszruszkowski/bitwarden-window/releases/download/v0.6.0/bitwarden-window-0.6.0-omarchy.tar.gz)** · **[Download for macOS (.zip)](https://github.com/mateuszruszkowski/bitwarden-window/releases/download/v0.6.0/bitwarden-window-0.6.0-macos.zip)** · [Release notes](https://github.com/mateuszruszkowski/bitwarden-window/releases/tag/v0.6.0) · [SHA-256 checksums](https://github.com/mateuszruszkowski/bitwarden-window/releases/download/v0.6.0/SHA256SUMS)
+**[Download for Omarchy (.tar.gz)](https://github.com/mateuszruszkowski/bitwarden-window/releases/download/v0.7.0/bitwarden-window-0.7.0-omarchy.tar.gz)** · **[Download for macOS (.zip)](https://github.com/mateuszruszkowski/bitwarden-window/releases/download/v0.7.0/bitwarden-window-0.7.0-macos.zip)** · [Release notes](https://github.com/mateuszruszkowski/bitwarden-window/releases/tag/v0.7.0) · [SHA-256 checksums](https://github.com/mateuszruszkowski/bitwarden-window/releases/download/v0.7.0/SHA256SUMS)
 
 1. Install the [official Bitwarden CLI](https://bitwarden.com/help/cli/) and sign in with `bw login`. If you already use the CLI, keep your current account and server.
 2. Download and extract the archive for your desktop. On macOS, double-click the ZIP in Finder. On Omarchy, choose **Extract Here** in the file manager.
@@ -14,15 +14,16 @@ Use it when a shell script or local assistant needs to check whether the vault i
 
 The Omarchy package requires Omarchy Shell with the Quickshell plugin API, Hyprland, Ghostty, user systemd and system Python 3.13+. The macOS package requires macOS 13+, a graphical login, a non-system Python 3.10+ on PATH and Swift 6 from Xcode or the Command Line Tools. Its installer builds the native menu app locally and starts it at graphical login.
 
-### What's in v0.6.0
+### What's in v0.7.0
 
-v0.6.0 adds `bw-window save` to store a piped secret as a personal login item. It builds on v0.5.0, the first release of Bitwarden Window for Omarchy and macOS.
+v0.7.0 adds an optional copy of selected login passwords into the system keyring and `bw-window get NAME` to read them while the window is closed. It is off unless you list items in `keyring_items`. v0.6.0 added `bw-window save`, and v0.5.0 was the first release of Bitwarden Window for Omarchy and macOS.
 
 - A **BW** button next to the Omarchy clock or in the macOS menu bar. Unlock once to start a 60-minute countdown on that computer.
 - A `bw-window status` command for other terminals, SSH sessions and local assistants. Source the optional shell helper to use the full CLI in the terminal where you unlock.
 - A bundled [Agent Skill](skills/use-bitwarden-window/SKILL.md) for Codex and Claude Code. It teaches the agent to check the timer and handle an explicitly requested recovery-key backup or secret save.
 - An optional `bw-window recovery-note` command to create or verify one personal secure note for an age backup key. Unlocking alone never writes a note.
 - An optional `bw-window save NAME` command to create or verify one personal login item from a secret piped on standard input.
+- An optional [keyring copy](#optional-keyring-copy) of listed login passwords, refreshed at each unlock and read with `bw-window get NAME`.
 
 The installer puts the commands in `~/.local/bin`. Use the full paths below if this directory is outside your PATH. Use real directories for `~/.local`, `~/.config` and the parent directories of the recovery identity. The broker rejects symbolic links along these paths.
 
@@ -31,16 +32,16 @@ The installer puts the commands in `~/.local/bin`. Use the full paths below if t
 Paste this into your coding agent on the computer where you want the BW button.
 
 ```text
-Install Bitwarden Window v0.6.0 from https://github.com/mateuszruszkowski/bitwarden-window. Follow AGENTS.md at that tag and verify the BW menu and CLI status. I’ll sign in and unlock locally.
+Install Bitwarden Window v0.7.0 from https://github.com/mateuszruszkowski/bitwarden-window. Follow AGENTS.md at that tag and verify the BW menu and CLI status. I’ll sign in and unlock locally.
 ```
 
 For a fresh Git installation, the agent can run this command from a directory where you keep software.
 
 ```sh
-git clone --depth 1 --branch v0.6.0 https://github.com/mateuszruszkowski/bitwarden-window.git bitwarden-window && (cd bitwarden-window && ./install.sh)
+git clone --depth 1 --branch v0.7.0 https://github.com/mateuszruszkowski/bitwarden-window.git bitwarden-window && (cd bitwarden-window && ./install.sh)
 ```
 
-Run it as your desktop user in the logged-in desktop session. After installation, `~/.local/bin/bw-window status` reports a closed window until you unlock. For an existing installation, use the [agent guide](https://github.com/mateuszruszkowski/bitwarden-window/blob/v0.6.0/AGENTS.md). Both downloadable packages also include it.
+Run it as your desktop user in the logged-in desktop session. After installation, `~/.local/bin/bw-window status` reports a closed window until you unlock. For an existing installation, use the [agent guide](https://github.com/mateuszruszkowski/bitwarden-window/blob/v0.7.0/AGENTS.md). Both downloadable packages also include it.
 
 ## Account and server
 
@@ -105,25 +106,49 @@ The installer registers **`use-bitwarden-window`** under `~/.agents/skills/` for
 | Codex | `$use-bitwarden-window How many minutes are left on this computer?` |
 | Claude Code | `/use-bitwarden-window Check the timer on this computer.` |
 
-A status request only checks the timer. If the window is closed, unlock locally with **BW** and ask the agent to check again. Ask explicitly to create or verify the configured recovery note, or to save a secret. The agent uses the following commands.
+A status request only checks the timer. If the window is closed, unlock locally with **BW** and ask the agent to check again. Ask explicitly to create or verify the configured recovery note, or to save a secret. An agent passes a [keyring copy](#optional-keyring-copy) to a command through a pipe or `$(...)` and does not show it in chat. The agent uses the following commands.
 
 | Command | Result |
 | --- | --- |
 | `~/.local/bin/bw-window status` | Remaining seconds while the window is open (exit 0). A closed window exits 1 |
 | `~/.local/bin/bw-window recovery-note` | Create or verify the one configured recovery note on explicit request |
 | `~/.local/bin/bw-window save NAME [--username USER] [--uri URL] [--notes-file FILE] < SECRET` | Create or verify one personal login item on explicit request |
+| `~/.local/bin/bw-window get NAME` | Print one value copied to the keyring at the last unlock, for a name in `keyring_items` |
 
 `save` stores one secret, such as an API key, as the password of a personal login item named `NAME`. It reads the secret only from piped standard input, never from arguments or the environment: one line of printable text of at most 3072 bytes, with the trailing newline removed. For example, run `ssh host 'cat ~/.config/app/token' | ~/.local/bin/bw-window save "App API key"`. The command never edits or deletes an item. If an item with the same name already holds the same secret and every supplied option, it is only verified. Any other matching item, including one in the archive or trash, is reported as a conflict and left unchanged. Like the recovery note, `save` requires an HTTPS server, stops if the account or server changes, and verifies the item after sync. It prints one result line and never prints the secret or the item. After an uncertain write, run the same command again to verify the item.
 
 A local process with access to your user account can call these operations. The tool is intended for trusted scripts on a trusted workstation. It is not a sandbox for untrusted same-user code. During a vault operation the official CLI receives its token in the child process environment. Code running as you, or as an administrator, can potentially inspect it, replace user-owned executables or read your local identity file. Expiry, manual lock and a macOS broker restart call `bw lock` for the same CLI profile. Expect other terminals using that profile to need a fresh unlock. If you run native `bw lock` yourself, the badge may continue counting down while the next recovery operation detects the locked vault. The desktop app and browser extension have their own unlock state.
 
-## Update
+## Optional keyring copy
 
-Close the active window with `~/.local/bin/bw-window lock`. For a downloaded installation, extract the [current release](https://github.com/mateuszruszkowski/bitwarden-window/releases/tag/v0.6.0) into a fresh folder and run its `./install.sh`. Download the archive and its matching `SHA256SUMS` together. For a Git installation, check that your clean checkout uses this project's GitHub repository as `origin`, then refresh the single release tag and reinstall:
+This feature copies the passwords of **listed** login items into the system keyring, so scripts can read them while the window is closed. It changes the security model: a process running as you can read a copied value without your master password, for as long as your keyring is unlocked. It is off by default. Keep the list short and limit it to keys you would also keep in a local credentials file. Copies use the macOS login keychain through `/usr/bin/security`, or the Secret Service (for example GNOME Keyring) through `secret-tool` on Linux. Install `libsecret` and run a Secret Service provider on Omarchy before using it.
+
+List exact item names in `~/.config/bw-window/config.json`:
+
+```json
+{
+  "keyring_items": ["App API key", "Mail relay password"]
+}
+```
+
+At each unlock, after the window opens, the broker syncs the vault and stores the password of each listed personal or shared login item under the service `bitwarden-window`, with the item name as the account. It overwrites the previous copy, so a changed password reaches the keyring at the next unlock. It removes copies for names you take off the list. The window opens even if a copy fails. A name that matches no item, several items (for example a personal item and a shared item with the same name), or an item that is not a login with a password of at most 1024 printable ASCII characters is not copied, and any earlier copy is removed. If the vault sync fails, earlier copies are kept. Names must match the item name exactly, including case. List at most 32 names of at most 128 characters each, without `"`, `\`, a leading `-` or surrounding spaces. Edit the list before unlocking; the next unlock applies it.
+
+Read a copied value with
 
 ```sh
-git fetch --depth 1 origin +refs/tags/v0.6.0:refs/tags/v0.6.0
-git switch --detach v0.6.0
+~/.local/bin/bw-window get "App API key" | some-tool --token-stdin
+TOKEN="$(~/.local/bin/bw-window get "App API key")"
+```
+
+`get` prints the value to standard output **without a trailing newline** and exits 0. It works while the window is open or closed. It reads only names that are still in `keyring_items`, and it exits 1 with a message on standard error when the name is not listed or no copy is available. `status` adds a line such as `Keyring: 1 of 2 listed items synced at the last unlock; not synced: Mail relay password (missing).` The codes are `missing`, `duplicate`, `unsupported`, `keyring` (the keyring refused or failed) and `vault` (the vault could not be read). On macOS `status` shows `pending` while the copy is still running just after an unlock. The broker never prints, logs or passes a value on a command line. A copy stays in the keyring until the next unlock after you remove its name, and uninstalling does not remove copies. To remove all of them, empty the list or delete it, then unlock once.
+
+## Update
+
+Close the active window with `~/.local/bin/bw-window lock`. For a downloaded installation, extract the [current release](https://github.com/mateuszruszkowski/bitwarden-window/releases/tag/v0.7.0) into a fresh folder and run its `./install.sh`. Download the archive and its matching `SHA256SUMS` together. For a Git installation, check that your clean checkout uses this project's GitHub repository as `origin`, then refresh the single release tag and reinstall:
+
+```sh
+git fetch --depth 1 origin +refs/tags/v0.7.0:refs/tags/v0.7.0
+git switch --detach v0.7.0
 ./install.sh
 ```
 

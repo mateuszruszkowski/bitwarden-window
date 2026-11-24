@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import plistlib
 import re
+import runpy
 import secrets
 import shlex
 import shutil
@@ -21,6 +22,7 @@ import time
 import unittest
 
 ROOT = Path(__file__).absolute().parents[1]
+FAKE_KEYRING = runpy.run_path(str(ROOT / "tests/test_core.py"))["FAKE_KEYRING"]
 FAKE_BW = """
 import base64, hashlib, json, os, sys
 from pathlib import Path
@@ -104,6 +106,7 @@ assert os.environ["HOME"] == {str(self.home)!r}
 with patch("pwd.getpwuid", return_value=SimpleNamespace(pw_dir=os.environ["HOME"])):
     exec(compile({core!r}, __file__, "exec"))
 assert str(BW) == os.path.join(os.environ["HOME"], "Tools With Spaces", "bw")
+Keychain.tool = os.path.join(os.environ["HOME"], "Tools With Spaces", "security")
 '''
         (self.src / "lib/core.py").write_text(fixture)
         self.base = "org.bitwardenwindow.test." + root.name
@@ -124,6 +127,8 @@ assert str(BW) == os.path.join(os.environ["HOME"], "Tools With Spaces", "bw")
         digest = hashlib.sha256(self.token).hexdigest()
         backend = self.bin / "fixture.py"
         backend.write_text(f"EXPECTED_HOME = {str(self.home)!r}\nEXPECTED_DIGEST = {digest!r}\n" + FAKE_BW)
+        (self.bin / "security").write_text(FAKE_KEYRING)
+        (self.bin / "security").chmod(0o700)
         for name, args in (("bw", [sys.executable, "-IB", str(backend)]),
                            ("python3", [sys.executable])):
             wrapper = self.bin / name
@@ -244,6 +249,29 @@ assert str(BW) == os.path.join(os.environ["HOME"], "Tools With Spaces", "bw")
                                                      success=False).stderr)
         self.invoke(self.client, "status")
         self.invoke(self.client, "lock")
+        self.invoke(self.uninstall)
+
+    def test_keyring_copy_outlives_the_window(self):
+        secret = b"synthetic-keyring-value"
+        (self.home / "fixture-item.json").write_text(json.dumps(
+            {"id": "fixture", "type": 1, "name": "Fixture login", "login": {"password": secret.decode()}}))
+        self.config.write_text(json.dumps({"server_url": "https://fixture.invalid",
+                                           "keyring_items": ["Fixture login", "Absent"]}))
+        self.invoke(self.install)
+        self.invoke(self.menu, "--test-unlock", data=self.password)
+        # Status does not wait for the copy, which runs after the start reply.
+        until = time.monotonic() + 30
+        while b"pending" in (status := self.invoke(self.client, "status").stdout) and time.monotonic() < until:
+            time.sleep(0.2)
+        self.assertIn(b"\nKeyring: 1 of 2 listed items synced at the last unlock; not synced: Absent (missing).\n",
+                      status)
+        self.invoke(self.client, "lock")
+        self.assertEqual(self.invoke(self.client, "get", "Fixture login").stdout, secret)
+        for name in ("Absent", "Other"):
+            failed = self.invoke(self.client, "get", name, success=False)
+            self.assertEqual(failed.stdout, b"")
+        self.assertNotIn(secret, (self.home / "keyring-argv").read_bytes())
+        self.assertNotIn(secret.hex().encode(), (self.home / "keyring-argv").read_bytes())
         self.invoke(self.uninstall)
 
     def test_bootout_relocks(self):

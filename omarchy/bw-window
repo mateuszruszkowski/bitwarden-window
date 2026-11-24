@@ -98,6 +98,8 @@ def serve(stamp):
         os.close(0)
         os.write(1, b"OPEN\n")
         os.close(1)
+        # Requests wait in the listen backlog until the optional keyring copy finishes.
+        core.sync_keyring(token, user)
         while core.now() < deadline:
             conn, _ = listener.accept()
             with conn:
@@ -267,6 +269,10 @@ def main(args):
         request("obsidian")
     elif args in (["status"], ["obsidian"]):
         request(args[0])
+        if args == ["status"] and (summary := core.keyring_summary()):
+            print(summary)
+    elif len(args) == 2 and args[0] == "get":
+        core.keyring_get(args[1])
     elif args[:1] == ["save"]:
         request("save", b"\n" + core.save_request(args[1:]))
     elif args in (["lock"], ["_recover"]) or (len(args) == 2 and args[0] == "start"):
@@ -297,7 +303,7 @@ def main(args):
                 stop()
                 print("Bitwarden window closed.")
     else:
-        print("Usage: bw-window {now|status|recovery-note|save NAME|lock|start STAMP}", file=sys.stderr)
+        print("Usage: bw-window {now|status|get NAME|recovery-note|save NAME|lock|start STAMP}", file=sys.stderr)
         return 2
     return 0
 
