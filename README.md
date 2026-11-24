@@ -18,7 +18,7 @@ Or run the same command on either system, from a directory where you keep softwa
 git clone --depth 1 --branch v0.8.0 https://github.com/mateuszruszkowski/bitwarden-window.git bitwarden-window && (cd bitwarden-window && ./install.sh)
 ```
 
-Later releases install with `~/.local/bin/bw-window upgrade`. See [Update](#update).
+Later releases install with `bw-window upgrade`. See [Update](#update).
 
 The Omarchy package requires Omarchy Shell with the Quickshell plugin API, Hyprland, Ghostty, user systemd and system Python 3.13+. The macOS package requires macOS 13+, a graphical login, a non-system Python 3.10+ on PATH and Swift 6 from Xcode or the Command Line Tools. Its installer builds the native menu app locally and starts it at graphical login.
 
@@ -147,11 +147,13 @@ TOKEN="$(~/.local/bin/bw-window get "App API key")"
 
 ## Update
 
-Close the active window with `~/.local/bin/bw-window lock`, then run
+Close the active window with `bw-window lock`, then run
 
 ```sh
-~/.local/bin/bw-window upgrade
+bw-window upgrade
 ```
+
+This needs `~/.local/bin` on your PATH, as it is by default on Omarchy. If your shell reports `command not found`, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` or `~/.bashrc`, or use the full path `~/.local/bin/bw-window`.
 
 It refuses while a window is open. It downloads the latest release package for your system, checks it against the release `SHA256SUMS` and runs its installer. Give a tag such as `v0.8.0` to install that release instead, including an earlier one to roll back. Packages are kept in `~/.local/share/bw-window/releases/`: the installed one, for `./uninstall.sh`, and the one it replaced. The checksum detects a damaged download. It does not protect against a compromised GitHub account, see [SECURITY.md](SECURITY.md).
 
