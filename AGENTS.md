@@ -1,6 +1,6 @@
 # Installing Bitwarden Window for a user
 
-Use the **v0.8.0** release on the target computer, in the user's graphical login session and usual Bitwarden CLI profile. The root installer selects Omarchy or macOS. Use the user's normal permissions. [README and downloads](README.md#install)
+Use the **v0.8.1** release on the target computer, in the user's graphical login session and usual Bitwarden CLI profile. The root installer selects Omarchy or macOS. Use the user's normal permissions. [README and downloads](README.md#install)
 
 ## Before installation
 
@@ -10,7 +10,7 @@ Use the **v0.8.0** release on the target computer, in the user's graphical login
 
 ## Install
 
-For a fresh checkout, run the pinned command in the [README](README.md#install-with-a-coding-agent). If you already extracted the v0.8.0 archive for this platform, run `./install.sh` from its root. This installs the menu, background service, CLI and the [use-bitwarden-window skill](skills/use-bitwarden-window/SKILL.md). Keep the directory for `./uninstall.sh`.
+For a fresh checkout, run the pinned command in the [README](README.md#install-with-a-coding-agent). If you already extracted the v0.8.1 archive for this platform, run `./install.sh` from its root. This installs the menu, background service, CLI and the [use-bitwarden-window skill](skills/use-bitwarden-window/SKILL.md). Keep the directory for `./uninstall.sh`.
 
 To update an installation of v0.8.0 or later, run `~/.local/bin/bw-window upgrade` while the window is closed, and only when the user asks. It exits non-zero without changes if the window is open or the download does not match `SHA256SUMS`. Update an older installation with the Git commands in the [README](README.md#update).
 

@@ -6,7 +6,7 @@ Use it when a shell script or local assistant needs to check whether the vault i
 
 ## Install
 
-**[Download for Omarchy (.tar.gz)](https://github.com/mateuszruszkowski/bitwarden-window/releases/download/v0.8.0/bitwarden-window-0.8.0-omarchy.tar.gz)** · **[Download for macOS (.zip)](https://github.com/mateuszruszkowski/bitwarden-window/releases/download/v0.8.0/bitwarden-window-0.8.0-macos.zip)** · [Release notes](https://github.com/mateuszruszkowski/bitwarden-window/releases/tag/v0.8.0) · [SHA-256 checksums](https://github.com/mateuszruszkowski/bitwarden-window/releases/download/v0.8.0/SHA256SUMS)
+**[Download for Omarchy (.tar.gz)](https://github.com/mateuszruszkowski/bitwarden-window/releases/download/v0.8.1/bitwarden-window-0.8.1-omarchy.tar.gz)** · **[Download for macOS (.zip)](https://github.com/mateuszruszkowski/bitwarden-window/releases/download/v0.8.1/bitwarden-window-0.8.1-macos.zip)** · [Release notes](https://github.com/mateuszruszkowski/bitwarden-window/releases/tag/v0.8.1) · [SHA-256 checksums](https://github.com/mateuszruszkowski/bitwarden-window/releases/download/v0.8.1/SHA256SUMS)
 
 1. Install the [official Bitwarden CLI](https://bitwarden.com/help/cli/) and sign in with `bw login`. If you already use the CLI, keep your current account and server.
 2. Download and extract the archive for your desktop. On macOS, double-click the ZIP in Finder. On Omarchy, choose **Extract Here** in the file manager.
@@ -15,16 +15,16 @@ Use it when a shell script or local assistant needs to check whether the vault i
 Or run the same command on either system, from a directory where you keep software. It needs `git` and selects Omarchy or macOS itself.
 
 ```sh
-git clone --depth 1 --branch v0.8.0 https://github.com/mateuszruszkowski/bitwarden-window.git bitwarden-window && (cd bitwarden-window && ./install.sh)
+git clone --depth 1 --branch v0.8.1 https://github.com/mateuszruszkowski/bitwarden-window.git bitwarden-window && (cd bitwarden-window && ./install.sh)
 ```
 
 Later releases install with `bw-window upgrade`. See [Update](#update).
 
 The Omarchy package requires Omarchy Shell with the Quickshell plugin API, Hyprland, Ghostty, user systemd and system Python 3.13+. The macOS package requires macOS 13+, a graphical login, a non-system Python 3.10+ on PATH and Swift 6 from Xcode or the Command Line Tools. Its installer builds the native menu app locally and starts it at graphical login.
 
-### What's in v0.8.0
+### What's in v0.8.1
 
-v0.8.0 adds `bw-window upgrade`, which downloads, verifies and installs a newer release on either system. v0.7.0 added an optional copy of selected login passwords into the system keyring and `bw-window get NAME` to read them while the window is closed. It is off unless you list items in `keyring_items`. v0.6.0 added `bw-window save`, and v0.5.0 was the first release of Bitwarden Window for Omarchy and macOS.
+v0.8.1 adds `bww`, a short name for `bw-window` such as `bww status` or `bww lock`, accepts `update` as another name for `upgrade`, and puts `~/.local/bin` on your PATH when it is missing. v0.8.0 added `bw-window upgrade`, which downloads, verifies and installs a newer release on either system. v0.7.0 added an optional copy of selected login passwords into the system keyring and `bw-window get NAME` to read them while the window is closed. It is off unless you list items in `keyring_items`. v0.6.0 added `bw-window save`, and v0.5.0 was the first release of Bitwarden Window for Omarchy and macOS.
 
 - A **BW** button next to the Omarchy clock or in the macOS menu bar. Unlock once to start a 60-minute countdown on that computer.
 - A `bw-window status` command for other terminals, SSH sessions and local assistants. Source the optional shell helper to use the full CLI in the terminal where you unlock.
@@ -33,17 +33,17 @@ v0.8.0 adds `bw-window upgrade`, which downloads, verifies and installs a newer 
 - An optional `bw-window save NAME` command to create or verify one personal login item from a secret piped on standard input.
 - An optional [keyring copy](#optional-keyring-copy) of listed login passwords, refreshed at each unlock and read with `bw-window get NAME`.
 
-The installer puts the commands in `~/.local/bin`. Use the full paths below if this directory is outside your PATH. Use real directories for `~/.local`, `~/.config` and the parent directories of the recovery identity. The broker rejects symbolic links along these paths.
+The installer puts the commands in `~/.local/bin`. If that directory is not on your PATH, it adds one marked line to `~/.zshrc`, or to `~/.bashrc` (`~/.bash_profile` on macOS) for bash, and removal deletes it. Open a new terminal afterwards. With another shell, add the directory yourself or use the full paths below. Use real directories for `~/.local`, `~/.config` and the parent directories of the recovery identity. The broker rejects symbolic links along these paths.
 
 ### Install with a coding agent
 
 Paste this into your coding agent on the computer where you want the BW button.
 
 ```text
-Install Bitwarden Window v0.8.0 from https://github.com/mateuszruszkowski/bitwarden-window. Follow AGENTS.md at that tag and verify the BW menu and CLI status. I’ll sign in and unlock locally.
+Install Bitwarden Window v0.8.1 from https://github.com/mateuszruszkowski/bitwarden-window. Follow AGENTS.md at that tag and verify the BW menu and CLI status. I’ll sign in and unlock locally.
 ```
 
-For a fresh installation, the agent runs the [one-line command](#install) as your desktop user. On Omarchy it can run over SSH while you are logged in to the desktop. After installation, `~/.local/bin/bw-window status` reports a closed window until you unlock. For an existing installation, use the [agent guide](https://github.com/mateuszruszkowski/bitwarden-window/blob/v0.8.0/AGENTS.md). Both downloadable packages also include it.
+For a fresh installation, the agent runs the [one-line command](#install) as your desktop user. On Omarchy it can run over SSH while you are logged in to the desktop. After installation, `~/.local/bin/bw-window status` reports a closed window until you unlock. For an existing installation, use the [agent guide](https://github.com/mateuszruszkowski/bitwarden-window/blob/v0.8.1/AGENTS.md). Both downloadable packages also include it.
 
 ## Account and server
 
@@ -116,7 +116,9 @@ A status request only checks the timer. If the window is closed, unlock locally 
 | `~/.local/bin/bw-window recovery-note` | Create or verify the one configured recovery note on explicit request |
 | `~/.local/bin/bw-window save NAME [--username USER] [--uri URL] [--notes-file FILE] < SECRET` | Create or verify one personal login item on explicit request |
 | `~/.local/bin/bw-window get NAME` | Print one value copied to the keyring at the last unlock, for a name in `keyring_items` |
-| `~/.local/bin/bw-window upgrade [vX.Y.Z]` | Install the latest or the given release while the window is closed, at your request |
+| `~/.local/bin/bw-window upgrade [vX.Y.Z]` | Install the latest or the given release while the window is closed, at your request. `update` is the same command |
+
+`bww` is a short name for `bw-window` and takes the same commands, for example `bww status`, `bww lock` or `bww update`.
 
 `save` stores one secret, such as an API key, as the password of a personal login item named `NAME`. It reads the secret only from piped standard input, never from arguments or the environment: one line of printable text of at most 3072 bytes, with the trailing newline removed. For example, run `ssh host 'cat ~/.config/app/token' | ~/.local/bin/bw-window save "App API key"`. The command never edits or deletes an item. If an item with the same name already holds the same secret and every supplied option, it is only verified. Any other matching item, including one in the archive or trash, is reported as a conflict and left unchanged. Like the recovery note, `save` requires an HTTPS server, stops if the account or server changes, and verifies the item after sync. It prints one result line and never prints the secret or the item. After an uncertain write, run the same command again to verify the item.
 
@@ -153,15 +155,15 @@ Close the active window with `bw-window lock`, then run
 bw-window upgrade
 ```
 
-This needs `~/.local/bin` on your PATH, as it is by default on Omarchy. If your shell reports `command not found`, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` or `~/.bashrc`, or use the full path `~/.local/bin/bw-window`.
+`bw-window update`, `bww upgrade` and `bww update` do the same. Since v0.8.1 the installer puts `~/.local/bin` on your PATH. If your shell reports `command not found`, open a new terminal or use the full path `~/.local/bin/bw-window`.
 
 It refuses while a window is open. It downloads the latest release package for your system, checks it against the release `SHA256SUMS` and runs its installer. Give a tag such as `v0.8.0` to install that release instead, including an earlier one to roll back. Packages are kept in `~/.local/share/bw-window/releases/`: the installed one, for `./uninstall.sh`, and the one it replaced. The checksum detects a damaged download. It does not protect against a compromised GitHub account, see [SECURITY.md](SECURITY.md).
 
-Versions before v0.8.0 do not have `upgrade`. To update one of them, close the window and either extract the [current release](https://github.com/mateuszruszkowski/bitwarden-window/releases/tag/v0.8.0) into a fresh folder and run its `./install.sh`, or, in a clean Git checkout whose `origin` is this project's GitHub repository, run
+Versions before v0.8.0 do not have `upgrade`. To update one of them, close the window and either extract the [current release](https://github.com/mateuszruszkowski/bitwarden-window/releases/tag/v0.8.1) into a fresh folder and run its `./install.sh`, or, in a clean Git checkout whose `origin` is this project's GitHub repository, run
 
 ```sh
-git fetch --depth 1 origin +refs/tags/v0.8.0:refs/tags/v0.8.0
-git switch --detach v0.8.0
+git fetch --depth 1 origin +refs/tags/v0.8.1:refs/tags/v0.8.1
+git switch --detach v0.8.1
 ./install.sh
 ```
 
@@ -169,7 +171,7 @@ On Omarchy, run `omarchy restart shell` if the bar is still showing the previous
 
 ## Remove
 
-Close the active window with `~/.local/bin/bw-window lock`. Run `./uninstall.sh` from the extracted folder or Git checkout for the installed version, or from its package in `~/.local/share/bw-window/releases/` after an upgrade. On Omarchy the installer uses the user systemd manager. On macOS removal unloads both login agents. Removal cleans up the skill copies installed by the package. Installation, updates and removal preserve existing or locally edited skills with the same name. Linked registry directories are skipped. Remove any `shell.sh` source line you added to your shell configuration. The personal config in `~/.config/bw-window/`, the recovery records in `~/.local/state/bw-window/`, the age identity and the Bitwarden vault item are preserved.
+Close the active window with `~/.local/bin/bw-window lock`. Run `./uninstall.sh` from the extracted folder or Git checkout for the installed version, or from its package in `~/.local/share/bw-window/releases/` after an upgrade. On Omarchy the installer uses the user systemd manager. On macOS removal unloads both login agents. Removal cleans up the skill copies installed by the package. Installation, updates and removal preserve existing or locally edited skills with the same name. Linked registry directories are skipped. It also deletes `bww` and the PATH line added by the installer. Remove any `shell.sh` source line you added to your shell configuration. The personal config in `~/.config/bw-window/`, the recovery records in `~/.local/state/bw-window/`, the age identity and the Bitwarden vault item are preserved.
 
 ## Tests
 

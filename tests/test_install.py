@@ -38,11 +38,18 @@ class InstallTests(unittest.TestCase):
         return subprocess.run([ROOT / script], env=self.env, capture_output=True, text=True)
 
     def test_install_upgrade_uninstall(self):
+        self.env["SHELL"] = "/bin/bash"
+        rc = self.home / ".bashrc"
+        rc.write_text("keep\n")
         for _ in range(2):
             result = self.call("install.sh")
             self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.client.is_file())
         self.assertTrue((self.home / ".local/bin/bw-unlock").is_file())
+        self.assertEqual(rc.read_text().count("# Bitwarden Window"), 1)
+        shortcut = subprocess.run([self.home / ".local/bin/bww", "help"], env=self.env, capture_output=True, text=True)
+        self.assertEqual(shortcut.returncode, 2)
+        self.assertIn("update [TAG]", shortcut.stderr)
         self.assertTrue((self.lib / "native-bw").samefile(self.bin / "bw"))
         skills = [self.home / name / "skills/use-bitwarden-window" for name in (".agents", ".claude")]
         for skill in skills:
@@ -57,7 +64,17 @@ class InstallTests(unittest.TestCase):
         for skill in skills:
             self.assertFalse(os.path.lexists(skill))
         self.assertFalse((self.home / ".local/bin/bw-unlock").exists())
+        self.assertFalse((self.home / ".local/bin/bww").exists())
+        self.assertEqual(rc.read_text(), "keep\n")
         self.assertEqual(config.read_text(), "{}")
+
+    def test_foreign_shortcut_is_preserved(self):
+        shortcut = self.home / ".local/bin/bww"
+        shortcut.parent.mkdir(parents=True)
+        shortcut.write_text("mine")
+        self.assertEqual(self.call("install.sh").returncode, 0)
+        self.assertEqual(self.call("uninstall.sh").returncode, 0)
+        self.assertEqual(shortcut.read_text(), "mine")
 
     def test_custom_profile_and_private_ca(self):
         self.env.update({"BITWARDENCLI_APPDATA_DIR": str(self.home / "custom profile"),

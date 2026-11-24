@@ -63,13 +63,14 @@ class UpgradeTest(unittest.TestCase):
 
     def test_installs_verified_latest_and_keeps_previous(self):
         self.publish(tarball("0.9.0", '#!/bin/sh\necho installed > "$HOME/ran"\n'))
-        for old in ("v0.8.0", "v0.8.1", "notes"):
+        current = "v" + upgrade.VERSION
+        for old in ("v0.7.9", current, "notes"):
             (self.releases / old).mkdir(parents=True)
         code, output = self.run_main()
         self.assertEqual(code, 0, output)
         self.assertEqual((self.home / "ran").read_text(), "installed\n")
         self.assertTrue((self.releases / "v0.9.0/install.sh").is_file())
-        self.assertEqual(sorted(p.name for p in self.releases.iterdir()), ["notes", "v0.8.0", "v0.9.0"])
+        self.assertEqual(sorted(p.name for p in self.releases.iterdir()), sorted(["notes", current, "v0.9.0"]))
 
     def test_checksum_mismatch_installs_nothing(self):
         self.publish(tarball("0.9.0", '#!/bin/sh\ntouch "$HOME/ran"\n'), digest="0" * 64)

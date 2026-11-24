@@ -11,7 +11,7 @@ import tempfile
 import urllib.error
 import urllib.request
 
-VERSION = "0.8.0"
+VERSION = "0.8.1"
 REPO = "https://github.com/mateuszruszkowski/bitwarden-window"
 FIRST = (0, 8, 0)  # Earlier releases do not install this command.
 TAG = re.compile(r"v(\d+)\.(\d+)\.(\d+)")

@@ -17,6 +17,7 @@ case $(uname -s) in
  *) exit 2 ;;
 esac
 python3 -I lib/agent-skill.py uninstall
+python3 -I lib/install-shell.py uninstall
 rm -f "$HOME/.local/bin/bw-unlock" "$lib/auth.py" "$lib/shell.sh" "$lib/upgrade.py" "$lib/native-bw"
 # Remove only bytecode for modules this installer owns.
 for cache in "$lib"/__pycache__/core.cpython-*.pyc "$lib"/__pycache__/auth.cpython-*.pyc; do
