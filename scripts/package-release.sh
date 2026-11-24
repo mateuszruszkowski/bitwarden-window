@@ -11,7 +11,7 @@ output=$(cd "$2" && pwd)
 cd "$(dirname "$0")/.."
 commit=$(git rev-parse --verify "refs/tags/$tag^{commit}")
 export TZ=UTC
-common=(AGENTS.md LICENSE README.md SECURITY.md install.sh uninstall.sh lib skills tests/test_core.py tests/test_shell.py tests/test_agent_skill.py)
+common=(AGENTS.md LICENSE README.md SECURITY.md install.sh uninstall.sh lib skills tests/test_core.py tests/test_shell.py tests/test_agent_skill.py tests/test_upgrade.py)
 prefix="bitwarden-window-${tag#v}"
 linux="$prefix-omarchy.tar.gz"
 mac="$prefix-macos.zip"

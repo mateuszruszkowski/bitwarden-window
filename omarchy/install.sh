@@ -7,6 +7,12 @@ for prog in bw systemctl systemd-run omarchy ghostty hyprctl; do
   command -v "$prog" >/dev/null || { echo "Missing prerequisite: $prog" >&2; exit 1; }
 done
 /usr/bin/python3 -I -c 'import os, time, sys; sys.exit(not (hasattr(os, "timerfd_create") and hasattr(time, "CLOCK_BOOTTIME")))' || { echo "Requires system Python 3.13+ with timerfd support." >&2; exit 1; }
+if [[ -z ${OMARCHY_PATH:-} ]]; then
+  # Over SSH, reuse the logged-in desktop session known to the user manager.
+  while IFS='=' read -r key value; do
+    case $key in OMARCHY_PATH|WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE) [[ -z $value ]] || export "$key=$value" ;; esac
+  done < <(systemctl --user show-environment)
+fi
 omarchy shell shell ping | grep -qx ok || { echo 'Run in a logged-in Omarchy desktop session.' >&2; exit 1; }
 systemctl --user show-environment >/dev/null
 omarchy plugin validate "$PWD/plugin"

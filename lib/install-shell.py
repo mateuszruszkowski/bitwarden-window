@@ -14,7 +14,7 @@ if (lib / ".bitwarden-window-public").read_text().strip() != "bitwarden-window/v
 source = Path(__file__).parent
 with tempfile.TemporaryDirectory(dir=lib) as tmp:
     stage = Path(tmp)
-    for name in ("auth.py", "shell.sh"):
+    for name in ("auth.py", "shell.sh", "upgrade.py"):
         shutil.copyfile(source / name, stage / name)
         os.chmod(stage / name, 0o600)
         os.replace(stage / name, lib / name)

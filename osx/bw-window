@@ -333,8 +333,11 @@ def main(args):
                 print(summary)
     elif len(args) == 2 and args[0] == "get":
         core.keyring_get(args[1])
+    elif args[:1] == ["upgrade"]:
+        upgrade = HOME / ".local/lib/bw-window/upgrade.py"
+        os.execv(sys.executable, [sys.executable, "-I", str(upgrade), *args[1:]])
     else:
-        print("Usage: bw-window {now|status|get NAME|recovery-note|save NAME|lock|start STAMP}", file=sys.stderr)
+        print("Usage: bw-window {now|status|get NAME|recovery-note|save NAME|lock|upgrade [TAG]|start STAMP}", file=sys.stderr)
         return 2
     return 0
 
